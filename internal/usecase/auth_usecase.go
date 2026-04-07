@@ -69,7 +69,7 @@ func (u *authUsecase) Login(email, password string) (string, string, error) {
 	// 3. Buat Access Token
 	accessTokenClaims := jwt.MapClaims{
 		"user_id": existing.ID,
-		"exp":     time.Now().Add(time.Minute * 3).Unix(),
+		"exp":     time.Now().Add(time.Minute * 15).Unix(),
 	}
 
 	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessTokenClaims)
