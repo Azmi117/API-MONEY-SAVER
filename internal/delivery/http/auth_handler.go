@@ -123,7 +123,7 @@ func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Value:    accessToken,
 		HttpOnly: true,
 		Path:     "/",
-		Expires:  time.Now().Add(3 * time.Minute),
+		Expires:  time.Now().Add(15 * time.Minute),
 		SameSite: http.SameSiteLaxMode,
 	})
 
