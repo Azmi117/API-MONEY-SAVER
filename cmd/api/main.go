@@ -25,7 +25,7 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	delivery.MapRoutes(mux, authHandler)
+	delivery.MapRoutes(mux, authHandler, authRepo)
 
 	port := ":8080"
 	log.Printf("Server running on port %s", port)

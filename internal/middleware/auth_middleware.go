@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
+	"github.com/Azmi117/API-MONEY-SAVER.git/internal/repository"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
@@ -19,44 +20,41 @@ func sendError(w http.ResponseWriter, err error) {
 	json.NewEncoder(w).Encode(appErr)
 }
 
-func Authenticate(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. Ambil JWT_SECRET
-		jwtSecret := os.Getenv("JWT_SECRET")
+func Authenticate(repo repository.AuthRepository) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			jwtSecret := os.Getenv("JWT_SECRET")
 
-		if jwtSecret == "" {
-			sendError(w, apperror.Internal("Failed load JWT SECRET from .env!"))
+			// 1. Ambil token dari cookie (Pastiin namanya "access_token" sesuai handler lo)
+			cookie, err := r.Cookie("access_token")
+			if err != nil {
+				sendError(w, apperror.Unauthorized("No token is exist!"))
+				return
+			}
+
+			tokenString := cookie.Value
+
+			// --- TAMBAHAN LOGIC BLACKLIST ---
+			// Cek ke DB: Apakah token ini sudah di-logout (revoked)?
+			if repo.IsTokenRevoked(tokenString) {
+				sendError(w, apperror.Unauthorized("Token sudah tidak berlaku, silakan login lagi!"))
+				return
+			}
+			// --------------------------------
+
+			// 2. Parsing JWT
+			token, _ := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+				return []byte(jwtSecret), nil
+			})
+
+			if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+				userID := uint(claims["user_id"].(float64))
+				ctx := context.WithValue(r.Context(), "user_id", userID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+			} else {
+				sendError(w, apperror.Unauthorized("Invalid Session, please relogin!"))
+			}
 		}
-
-		// 2. Ambil token dari cookie
-		cookie, err := r.Cookie("token")
-		if err != nil {
-			sendError(w, apperror.Unauthorized("No token is exist!"))
-		}
-
-		// 3. Parsing token(Bongkar)
-		tokenString := cookie.Value
-		token, _ := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
-			return []byte(jwtSecret), nil
-		})
-
-		// 1. Bongkar isi token (Claims) dan pastiin tokennya beneran asli (Valid)
-		if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-
-			// 2. Ambil UserID dari claims, ubah dari desimal (JSON) ke angka bulat (uint)
-			userID := uint(claims["user_id"].(float64))
-
-			// 3. Titip UserID ke "tas" request (Context) pake label "user_id"
-			ctx := context.WithValue(r.Context(), "user_id", userID)
-
-			// 4. Lanjut jalan ke Handler tujuan sambil bawa identitas (UserID) tadi
-			next.ServeHTTP(w, r.WithContext(ctx))
-
-		} else {
-			// 5. Kalau token palsu atau rusak, usir (Unauthorized)
-			sendError(w, apperror.Unauthorized("Invalid Session, please relogin!"))
-		}
-
 	}
 }
 

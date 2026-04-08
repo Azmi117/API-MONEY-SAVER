@@ -171,3 +171,43 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]string{"message": "Token Refreshed!"})
 }
+
+func (h *authHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// 1. Ambil token dari cookie buat di-blacklist/hapus di DB
+	atCookie, errAT := r.Cookie("access_token")
+	rtCookie, errRT := r.Cookie("refresh_token")
+
+	// Kalau ada tokennya, panggil Usecase buat urusan database
+	if errAT == nil && errRT == nil {
+		// Panggil Logout Sultan (Hapus RT di DB & Blacklist AT)
+		h.usecase.Logout(atCookie.Value, rtCookie.Value)
+	}
+
+	// 2. Kirim instruksi ke browser buat hapus cookie (Client-side)
+	// Hapus Access Token
+	http.SetCookie(w, &http.Cookie{
+		Name:     "access_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+	})
+
+	// Hapus Refresh Token
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+	})
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Logout Berhasil! Session dihapus dan Token di-blacklist.",
+	})
+}
