@@ -15,6 +15,7 @@ type AuthUsecase interface {
 	Register(user *models.User) error
 	Login(email, password string) (string, string, error)
 	RefreshToken(tokenString string) (string, error)
+	Logout(accessToken string, refreshToken string) error
 }
 
 type authUsecase struct {
@@ -89,38 +90,68 @@ func (u *authUsecase) Login(email, password string) (string, string, error) {
 		return "", "", err
 	}
 
+	rt := models.RefreshToken{
+		UserID:       existing.ID,
+		RefreshToken: refreshStr, // Simpen string tokennya
+		ExpiresAt:    time.Now().Add(time.Hour * 24 * 7),
+	}
+
+	// Panggil repo buat simpen ke table refresh_tokens
+	if err := u.repo.CreateRefreshToken(&rt); err != nil {
+		return "", "", apperror.Internal("Failed saving session to DB!")
+	}
+
 	return accessStr, refreshStr, nil
 }
 
 // --- INI METHOD BARU BIAR SYNC SAMA HANDLER ---
 
-func (u *authUsecase) RefreshToken(tokenString string) (string, error) {
-	rSecret := os.Getenv("REFRESH_SECRET")
+func (u *authUsecase) RefreshToken(tokenStr string) (string, error) {
+	// 1. Validasi: Ada gak token ini di table refresh_tokens?
+	// Ini gunanya table lo, Mi! Kalau hacker bawa token tapi di DB udah diapus (logout), dia gagal.
+	rt, err := u.repo.GetRefreshToken(tokenStr)
+	if err != nil {
+		return "", apperror.Unauthorized("Session gak valid atau sudah logout!")
+	}
+
+	// 2. Cek apakah tokennya sudah expired secara waktu di DB
+	if time.Now().After(rt.ExpiresAt) {
+		u.repo.DeleteRefreshToken(tokenStr) // Bersihin sampah di DB
+		return "", apperror.Unauthorized("Sesi habis, silakan login lagi!")
+	}
+
+	// 3. Kalau aman, baru generate Access Token baru
 	jSecret := os.Getenv("JWT_SECRET")
-
-	// 1. Bongkar & Validasi Refresh Token-nya
-	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
-		return []byte(rSecret), nil
-	})
-
-	if err != nil || !token.Valid {
-		return "", apperror.Unauthorized("Refresh token invalid or expired!")
-	}
-
-	// 2. Ambil UserID dari claims
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return "", apperror.Internal("Failed to parse claims")
-	}
-
-	userID := claims["user_id"]
-
-	// 3. Bikin Access Token baru (Umur 15 menit lagi)
-	newAccessTokenClaims := jwt.MapClaims{
-		"user_id": userID,
+	claims := jwt.MapClaims{
+		"user_id": rt.UserID,
 		"exp":     time.Now().Add(time.Minute * 15).Unix(),
 	}
 
-	newAccessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, newAccessTokenClaims)
-	return newAccessToken.SignedString([]byte(jSecret))
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(jSecret))
+}
+
+func (u *authUsecase) Logout(accessToken string, refreshToken string) error {
+	// 1. Hapus Refresh Token (Ini aman karena pake string token)
+	_ = u.repo.DeleteRefreshToken(refreshToken)
+
+	// 2. Bongkar Access Token buat dapet UserID
+	// Kita perlu secret buat decode
+	jSecret := os.Getenv("JWT_SECRET")
+	token, _ := jwt.Parse(accessToken, func(t *jwt.Token) (interface{}, error) {
+		return []byte(jSecret), nil
+	})
+
+	var uid uint
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		uid = uint(claims["user_id"].(float64))
+	}
+
+	// 3. Blacklist Access Token dengan UserID yang bener
+	revoked := models.RevokeToken{
+		Token:  accessToken,
+		UserID: uid, // <--- INI KUNCINYA, BIAR GAK 0 LAGI
+	}
+
+	return u.repo.CreateRevokeToken(&revoked)
 }

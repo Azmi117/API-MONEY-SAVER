@@ -8,6 +8,11 @@ import (
 type AuthRepository interface {
 	Create(user *models.User) error
 	FindByEmail(email string) (*models.User, error)
+	CreateRefreshToken(token *models.RefreshToken) error
+	GetRefreshToken(token string) (*models.RefreshToken, error)
+	DeleteRefreshToken(token string) error
+	CreateRevokeToken(token *models.RevokeToken) error
+	IsTokenRevoked(token string) bool
 }
 
 type authRepository struct {
@@ -29,4 +34,29 @@ func (r *authRepository) FindByEmail(email string) (*models.User, error) {
 		return nil, err
 	}
 	return &input, nil
+}
+
+func (r *authRepository) CreateRefreshToken(token *models.RefreshToken) error {
+	return r.db.Create(token).Error
+}
+
+func (r *authRepository) GetRefreshToken(token string) (*models.RefreshToken, error) {
+	var rt models.RefreshToken
+	err := r.db.Where("refresh_token = ?", token).First(&rt).Error
+	return &rt, err
+}
+
+func (r *authRepository) DeleteRefreshToken(token string) error {
+	return r.db.Where("refresh_token = ?", token).Delete(&models.RefreshToken{}).Error
+}
+
+func (r *authRepository) CreateRevokeToken(token *models.RevokeToken) error {
+	return r.db.Create(token).Error
+}
+
+func (r *authRepository) IsTokenRevoked(token string) bool {
+	var rt models.RevokeToken
+	// Cek apakah token ada di tabel blacklist
+	err := r.db.Where("token = ?", token).First(&rt).Error
+	return err == nil // Kalau ketemu (nil), berarti di-revoke (true)
 }
