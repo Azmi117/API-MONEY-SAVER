@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/repository"
@@ -69,7 +70,8 @@ func AuthorizeWorkspaceOwner(db *gorm.DB) func(http.HandlerFunc) http.HandlerFun
 			}
 
 			// 2. Ambil workspace_id dari query param (misal: /api/ws?id=1)
-			wsID := r.URL.Query().Get("id")
+			wsIDStr := r.URL.Query().Get("id")
+			wsID, _ := strconv.Atoi(wsIDStr)
 
 			// 3. Cek di DB apakah dia Owner
 			var ws models.Workspace
@@ -78,6 +80,36 @@ func AuthorizeWorkspaceOwner(db *gorm.DB) func(http.HandlerFunc) http.HandlerFun
 			if err != nil {
 				// 4. PAKE CUSTOM ERROR LO!
 				sendError(w, apperror.Forbidden("Only the owner can change this workspace!"))
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		}
+	}
+}
+
+func AuthorizeWorkspaceMember(db *gorm.DB) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			userID, ok := r.Context().Value("user_id").(uint)
+			if !ok {
+				sendError(w, apperror.Unauthorized("Invalid Session, please relogin!"))
+				return
+			}
+
+			// Cek workspace_id dari query param
+			wsIDStr := r.URL.Query().Get("workspace_id")
+			if wsIDStr == "" {
+				wsIDStr = r.URL.Query().Get("id") // fallback ke 'id'
+			}
+			wsID, _ := strconv.Atoi(wsIDStr)
+
+			var member models.WorkspaceMember
+			// Cek apakah UserID ini terdaftar sebagai member di WorkspaceID ini
+			err := db.Where("workspace_id = ? AND user_id = ?", wsID, userID).First(&member).Error
+
+			if err != nil {
+				sendError(w, apperror.Forbidden("You are not a member of this workspace!"))
 				return
 			}
 

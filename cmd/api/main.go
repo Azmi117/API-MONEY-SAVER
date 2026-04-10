@@ -19,13 +19,21 @@ func main() {
 
 	db := config.ConnectDB()
 
+	// 1. AUTH LAYER
 	authRepo := repository.NewAuthRepository(db)
 	authUsecase := usecase.NewAuthUsecase(authRepo)
 	authHandler := delivery.NewAuthHandler(authUsecase)
 
+	// 2. WORKSPACE LAYER (Inisialisasi komponen baru)
+	wsRepo := repository.NewWorkspaceRepository(db)
+	wsUsecase := usecase.NewWorkspaceUsecase(wsRepo, authRepo) // Inject authRepo buat logic Tiering
+	wsHandler := delivery.NewWorkspaceHandler(wsUsecase)
+
 	mux := http.NewServeMux()
 
-	delivery.MapRoutes(mux, authHandler, authRepo)
+	// 3. MAP ROUTES
+	// Masukin wsHandler dan db sesuai signature MapRoutes yang baru
+	delivery.MapRoutes(mux, authHandler, wsHandler, authRepo, db)
 
 	port := ":8080"
 	log.Printf("Server running on port %s", port)

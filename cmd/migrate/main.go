@@ -20,6 +20,7 @@ func main() {
 		&models.Transaction{},
 		&models.Workspace{},
 		&models.WorkspaceMember{},
+		&models.WorkspaceInvitation{},
 	)
 
 	if err != nil {

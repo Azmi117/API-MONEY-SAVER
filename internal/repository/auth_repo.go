@@ -8,6 +8,8 @@ import (
 type AuthRepository interface {
 	Create(user *models.User) error
 	FindByEmail(email string) (*models.User, error)
+	FindByID(id uint) (*models.User, error)
+	UpdateTier(id uint, tier string) error
 	CreateRefreshToken(token *models.RefreshToken) error
 	GetRefreshToken(token string) (*models.RefreshToken, error)
 	DeleteRefreshToken(token string) error
@@ -34,6 +36,21 @@ func (r *authRepository) FindByEmail(email string) (*models.User, error) {
 		return nil, err
 	}
 	return &input, nil
+}
+
+func (r *authRepository) FindByID(id uint) (*models.User, error) {
+	var user models.User
+	err := r.db.First(&user, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// 2. Fungsi Tambahan: Update Tier (Free ke Pro/Platinum)
+func (r *authRepository) UpdateTier(id uint, tier string) error {
+	// Pake .Model().Update() biar GORM tau table mana yang mau di-update field-nya aja
+	return r.db.Model(&models.User{}).Where("id = ?", id).Update("account_tier", tier).Error
 }
 
 func (r *authRepository) CreateRefreshToken(token *models.RefreshToken) error {
