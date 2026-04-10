@@ -45,3 +45,17 @@ func Internal(msg string) error {
 		Message: msg,
 	}
 }
+
+func UnprocessableEntity(msg string) error {
+	return &Apperror{
+		Code:    http.StatusUnprocessableEntity,
+		Message: msg,
+	}
+}
+
+func MethodNotAllowed(msg string) error {
+	return &Apperror{
+		Code:    http.StatusMethodNotAllowed, // 405
+		Message: msg,
+	}
+}
