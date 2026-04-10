@@ -38,7 +38,7 @@ func sendError(w http.ResponseWriter, err error) {
 func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// 1. Parse Form (Maks 5MB)
 	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		sendError(w, apperror.BadRequest("File kegedean, Mi!"))
+		sendError(w, apperror.BadRequest("File too large. Maximum size allowed is 5MB!"))
 		return
 	}
 
@@ -71,20 +71,20 @@ func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 		dst, err := os.Create(filePath)
 		if err != nil {
 			// Kalau gagal bikin file, kirim error ke Bruno, jangan diem aja!
-			sendError(w, apperror.Internal("Gagal bikin file di server: "+err.Error()))
+			sendError(w, apperror.Internal("Failed to save uploaded file: "+err.Error()))
 			return
 		}
 		defer dst.Close()
 
 		if _, err := io.Copy(dst, file); err != nil {
-			sendError(w, apperror.Internal("Gagal copy file: "+err.Error()))
+			sendError(w, apperror.Internal("Failed to save uploaded file.: "+err.Error()))
 			return
 		}
 
 		input.Avatar = fileName
 	} else if err != http.ErrMissingFile {
 		// Kalau error-nya bukan karena file kosong, tapi karena hal lain
-		sendError(w, apperror.BadRequest("Error pas ngambil file: "+err.Error()))
+		sendError(w, apperror.BadRequest("Error retrieving the uploaded file: "+err.Error()))
 		return
 	}
 
@@ -95,7 +95,7 @@ func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Register Berhasil!"})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Register success"})
 }
 
 func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +149,7 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	// Ambil refresh_token dari cookie
 	cookie, err := r.Cookie("refresh_token")
 	if err != nil {
-		sendError(w, apperror.Unauthorized("Sesi habis, login lagi Mi!"))
+		sendError(w, apperror.Unauthorized("Session expired, please login again!"))
 		return
 	}
 
@@ -208,6 +208,6 @@ func (h *authHandler) Logout(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Logout Berhasil! Session dihapus dan Token di-blacklist.",
+		"message": "Logout sucess! Session cleared and token revoked.",
 	})
 }
