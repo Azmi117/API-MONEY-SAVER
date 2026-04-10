@@ -111,13 +111,13 @@ func (u *authUsecase) RefreshToken(tokenStr string) (string, error) {
 	// Ini gunanya table lo, Mi! Kalau hacker bawa token tapi di DB udah diapus (logout), dia gagal.
 	rt, err := u.repo.GetRefreshToken(tokenStr)
 	if err != nil {
-		return "", apperror.Unauthorized("Session gak valid atau sudah logout!")
+		return "", apperror.Unauthorized("Session expired, please login again!")
 	}
 
 	// 2. Cek apakah tokennya sudah expired secara waktu di DB
 	if time.Now().After(rt.ExpiresAt) {
 		u.repo.DeleteRefreshToken(tokenStr) // Bersihin sampah di DB
-		return "", apperror.Unauthorized("Sesi habis, silakan login lagi!")
+		return "", apperror.Unauthorized("Session expired, please login again!")
 	}
 
 	// 3. Kalau aman, baru generate Access Token baru
