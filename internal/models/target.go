@@ -9,4 +9,7 @@ type Target struct {
 	AmountLimit   float64 `gorm:"type:decimal(15,2)" json:"amount_limit"`
 	SavingsTarget float64 `gorm:"type:decimal(15,2)" json:"savings_target"`
 	IsActive      bool    `gorm:"default:true" json:"is_active"`
+
+	// --- RELATIONSHIPS ---
+	Workspace Workspace `gorm:"foreignKey:WorkspaceID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
 }
