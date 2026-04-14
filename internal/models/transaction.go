@@ -10,12 +10,14 @@ type Transaction struct {
 	gorm.Model
 	UserID      uint      `gorm:"not null" json:"user_id"`
 	WorkspaceID uint      `gorm:"not null" json:"workspace_id"`
-	CategoryID  uint      `gorm:"not null" json:"category_id"`
+	CategoryID  *uint     `json:"category_id"`
 	Amount      float64   `gorm:"type:decimal(15,2);not null" json:"amount"`
 	Type        string    `gorm:"type:varchar(10);not null" json:"type"` // income/expense
 	Date        time.Time `gorm:"type:date;not null" json:"date"`
 	Note        string    `gorm:"type:varchar(255)" json:"note"`
+	Merchant    string    `gorm:"type:varchar(100)" json:"merchant"`
 	Source      string    `gorm:"type:varchar(20);default:'web'" json:"source"`
+	Status      string    `gorm:"type:varchar(20);default:'approved'" json:"status"`
 
 	// --- RELATIONSHIPS ---
 	User         User          `gorm:"foreignKey:UserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
