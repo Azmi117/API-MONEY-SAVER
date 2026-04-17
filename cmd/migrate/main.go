@@ -21,6 +21,7 @@ func main() {
 		&models.Workspace{},
 		&models.WorkspaceMember{},
 		&models.WorkspaceInvitation{},
+		&models.TransactionItem{},
 	)
 
 	if err != nil {

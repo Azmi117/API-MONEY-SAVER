@@ -7,6 +7,7 @@ import (
 
 type AuthRepository interface {
 	Create(user *models.User) error
+	Update(user *models.User) error
 	FindByEmail(email string) (*models.User, error)
 	FindByID(id uint) (*models.User, error)
 	UpdateTier(id uint, tier string) error
@@ -15,6 +16,7 @@ type AuthRepository interface {
 	DeleteRefreshToken(token string) error
 	CreateRevokeToken(token *models.RevokeToken) error
 	IsTokenRevoked(token string) bool
+	FindAllWithGmail() ([]models.User, error)
 }
 
 type authRepository struct {
@@ -27,6 +29,10 @@ func NewAuthRepository(params *gorm.DB) AuthRepository {
 
 func (r *authRepository) Create(user *models.User) error {
 	return r.db.Create(&user).Error
+}
+
+func (r *authRepository) Update(user *models.User) error {
+	return r.db.Save(user).Error
 }
 
 func (r *authRepository) FindByEmail(email string) (*models.User, error) {
@@ -76,4 +82,11 @@ func (r *authRepository) IsTokenRevoked(token string) bool {
 	// Cek apakah token ada di tabel blacklist
 	err := r.db.Where("token = ?", token).First(&rt).Error
 	return err == nil // Kalau ketemu (nil), berarti di-revoke (true)
+}
+
+func (r *authRepository) FindAllWithGmail() ([]models.User, error) {
+	var users []models.User
+	// Cari user yang gmail_enabled nya true
+	err := r.db.Where("gmail_enabled = ?", true).Find(&users).Error
+	return users, err
 }

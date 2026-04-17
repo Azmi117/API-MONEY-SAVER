@@ -8,14 +8,14 @@ import (
 	"gorm.io/gorm"
 )
 
-func MapRoutes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, aR repository.AuthRepository, db *gorm.DB) {
-	registerV1Routes(mux, aH, wH, aR, db)
+func MapRoutes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, tH *TransactionHandler, aR repository.AuthRepository, db *gorm.DB) {
+	registerV1Routes(mux, aH, wH, tH, aR, db)
 
 	fs := http.FileServer(http.Dir("./uploads"))
 	mux.Handle("GET /uploads/", http.StripPrefix("/uploads", fs))
 }
 
-func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, authRepo repository.AuthRepository, db *gorm.DB) {
+func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, tH *TransactionHandler, authRepo repository.AuthRepository, db *gorm.DB) {
 	prefix := "/api/v1/"
 	authMW := middleware.Authenticate(authRepo)
 	ownerMW := middleware.AuthorizeWorkspaceOwner(db)
@@ -26,19 +26,26 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("POST "+prefix+"auth/refresh", aH.Refresh)
 	mux.HandleFunc("POST "+prefix+"auth/logout", authMW(aH.Logout))
 
+	// --- GOOGLE OAUTH ROUTES ---
+	// User harus login apps dulu buat "Link Gmail"
+	mux.HandleFunc("GET "+prefix+"auth/google/login", authMW(aH.GoogleLogin))
+	// Callback dari Google (tanpa middleware auth)
+	mux.HandleFunc("GET "+prefix+"auth/google/callback", aH.GoogleCallback)
+
 	// --- WORKSPACE ROUTES ---
-	// Create & Get List
 	mux.HandleFunc("POST "+prefix+"workspaces", authMW(wH.Create))
 	mux.HandleFunc("GET "+prefix+"workspaces", authMW(wH.GetMyWorkspaces))
-
-	// Update & Delete (Hanya Owner)
-	// Update pake PUT, URL format: /api/v1/workspaces?id=1
 	mux.HandleFunc("PUT "+prefix+"workspaces", authMW(ownerMW(wH.UpdateWorkspace)))
-	// Delete pake DELETE, URL format: /api/v1/workspaces?id=1
 	mux.HandleFunc("DELETE "+prefix+"workspaces", authMW(ownerMW(wH.DeleteWorkspace)))
 
 	// --- INVITATION ROUTES ---
 	mux.HandleFunc("POST "+prefix+"workspaces/invite", authMW(wH.Invite))
-	// Respond pake PATCH karena mengupdate sebagian data (status)
 	mux.HandleFunc("POST "+prefix+"workspaces/invitations/respond", authMW(wH.RespondInvitation))
+
+	// --- TRANSACTION ROUTES ---
+	mux.HandleFunc("POST "+prefix+"transactions/manual", authMW(tH.CreateManual))
+	mux.HandleFunc("GET "+prefix+"transactions", authMW(ownerMW(tH.GetHistory)))
+	mux.HandleFunc("DELETE "+prefix+"transactions", authMW(tH.Delete))
+	mux.HandleFunc("POST "+prefix+"transactions/scan", authMW(tH.ScanReceipt))
+	mux.HandleFunc("PATCH "+prefix+"transactions/confirm", authMW(tH.Confirm))
 }
