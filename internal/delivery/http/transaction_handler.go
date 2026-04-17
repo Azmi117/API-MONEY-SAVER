@@ -181,8 +181,11 @@ func (h *TransactionHandler) ScanReceipt(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Limit upload size (misal 5MB)
-	r.ParseMultipartForm(5 << 20)
+	// Limit upload 5MB
+	if err := r.ParseMultipartForm(5 << 20); err != nil {
+		http.Error(w, "File terlalu besar", http.StatusBadRequest)
+		return
+	}
 
 	file, header, err := r.FormFile("image")
 	if err != nil {
@@ -191,18 +194,26 @@ func (h *TransactionHandler) ScanReceipt(w http.ResponseWriter, r *http.Request)
 	}
 	defer file.Close()
 
+	// Cek MIME Type
+	contentType := header.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, "image/") {
+		http.Error(w, "File harus berupa gambar", http.StatusBadRequest)
+		return
+	}
+
 	imgData, err := io.ReadAll(file)
 	if err != nil {
 		http.Error(w, "Gagal membaca gambar", http.StatusInternalServerError)
 		return
 	}
 
-	// Ambil Workspace ID dari form field
 	wsID, _ := strconv.Atoi(r.FormValue("workspace_id"))
-	userID := uint(1) // Placeholder
+	userID := uint(1)
 
-	tx, err := h.usecase.ProcessScan(r.Context(), userID, uint(wsID), imgData, header.Header.Get("Content-Type"))
+	tx, err := h.usecase.ProcessScan(r.Context(), userID, uint(wsID), imgData, contentType)
 	if err != nil {
+		// Balikin JSON error manual biar frontend gampang baca
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
@@ -210,7 +221,7 @@ func (h *TransactionHandler) ScanReceipt(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "Struk berhasil di-scan, silakan konfirmasi",
+		"message": "Struk berhasil di-scan",
 		"data":    tx,
 	})
 }

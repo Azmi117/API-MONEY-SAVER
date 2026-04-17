@@ -1,7 +1,7 @@
 package utils
 
 import (
-	"log"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -11,73 +11,75 @@ import (
 type ParsedTransaction struct {
 	Amount   float64
 	Merchant string
+	Method   string
+	Note     string
 	Date     time.Time
 }
 
 func ParseMandiriEmail(subject string, body string) *ParsedTransaction {
-	// 1. Regex Patterns
-	// Disederhanakan: Cari kata Nominal/Total, lalu ambil angka setelah Rp
-	reAmount := regexp.MustCompile(`(?:Nominal|Total).*?Rp\s?([0-9.]+)`)
-	reTime := regexp.MustCompile(`(\d{2}:\d{2}:\d{2})`)
-	reDate := regexp.MustCompile(`(\d{1,2}\s[A-Za-z]{3}\s\d{4})`)
-
-	// 2. Tentukan Merchant
 	var merchant string
+	var method string
+	var note string
+	var amount float64
+	bodyLower := strings.ToLower(body)
 	subjectLower := strings.ToLower(subject)
 
-	if strings.Contains(subjectLower, "top-up") {
-		merchant = "top-up e-money"
-	} else if strings.Contains(subjectLower, "berhasil") {
-		merchant = extractMerchant(body, "Penerima")
+	// 1. Deteksi Metode & Amount (Pake Parameter Sakti Lo)
+	if strings.Contains(bodyLower, "dengan qr") {
+		method = "QRIS"
+		amount = extractAmount(body, "Nominal")
+	} else if strings.Contains(bodyLower, "biaya transfer") {
+		method = "Transfer Bank Lain"
+		amount = extractAmount(body, "Total Transaksi") // Sesuai saran lo, ambil TOTAL (biar saldo sinkron)
+	} else if strings.Contains(bodyLower, "jumlah transfer") {
+		method = "Transfer"
+		amount = extractAmount(body, "Jumlah Transfer")
+	} else if strings.Contains(subjectLower, "top-up") {
+		method = "Top-up"
+		amount = extractAmount(body, "Nominal Top-up")
 	} else {
-		return nil
+		// Fallback jika tidak ada yang cocok
+		method = "Transfer"
+		amount = extractAmount(body, "(?:Nominal|Total|Jumlah)")
 	}
 
-	// 3. Extract Amount
-	amountMatch := reAmount.FindAllStringSubmatch(body, -1)
-	var amount float64
-
-	if len(amountMatch) > 0 {
-		// Ambil match terakhir (biar BI Fast dapet yang 'Total', e-money dapet yang 'Nominal')
-		lastMatch := amountMatch[len(amountMatch)-1]
-		cleanAmount := strings.ReplaceAll(lastMatch[1], ".", "")
-		amount, _ = strconv.ParseFloat(cleanAmount, 64)
+	// 2. Deteksi Merchant (Penerima/Penyedia Jasa)
+	if method == "Top-up" {
+		merchant = "Mandiri E-money"
+	} else {
+		merchant = extractMerchant(body)
 	}
 
-	// 4. Extract & Parse Date
-	dateMatch := reDate.FindString(body)
-	timeMatch := reTime.FindString(body)
+	// 3. Deteksi Note (Pesan/Keterangan)
+	if method == "Top-up" {
+		note = "Top-up via NFC/Livin"
+	} else {
+		note = extractNote(body)
+	}
 
-	var parsedDate time.Time
-	if dateMatch != "" && timeMatch != "" {
-		// Gabungkan dan bersihkan spasi double jika ada
-		fullDateStr := strings.TrimSpace(dateMatch) + " " + strings.TrimSpace(timeMatch)
+	// 4. Extract Date (Pake logic lama lo yang udah oke)
+	reTime := regexp.MustCompile(`(\d{2}:\d{2}:\d{2})`)
+	reDate := regexp.MustCompile(`(\d{1,2}\s[A-Za-z]{3}\s\d{4})`)
+	dateStr := reDate.FindString(body)
+	timeStr := reTime.FindString(body)
+	parsedDate := time.Now() // Default
 
-		// Samain format bulan (Jan, Feb, dsb)
-		fullDateStr = translateIndoMonth(fullDateStr)
-
-		// Layout Go: 2 Jan 2006 15:04:05
-		layout := "2 Jan 2006 15:04:05"
-		var err error
-		parsedDate, err = time.Parse(layout, fullDateStr)
-
-		if err != nil {
-			log.Printf("[Parser Error] Gagal parse tanggal '%s': %v", fullDateStr, err)
-			parsedDate = time.Now()
+	if dateStr != "" && timeStr != "" {
+		fullDateStr := translateIndoMonth(strings.TrimSpace(dateStr) + " " + strings.TrimSpace(timeStr))
+		if t, err := time.Parse("2 Jan 2006 15:04:05", fullDateStr); err == nil {
+			parsedDate = t
 		}
-	} else {
-		parsedDate = time.Now()
 	}
 
 	return &ParsedTransaction{
 		Amount:   amount,
-		Merchant: strings.ToLower(strings.TrimSpace(merchant)),
+		Merchant: strings.Title(strings.ToLower(strings.TrimSpace(merchant))),
+		Method:   method,
+		Note:     note,
 		Date:     parsedDate,
 	}
 }
 
-// Helper buat ganti 'Apr' (Indo) ke 'Apr' (Eng) - kebetulan sama,
-// tapi kalau 'Mei' jadi 'May', 'Agu' jadi 'Aug'
 func translateIndoMonth(dateStr string) string {
 	r := strings.NewReplacer(
 		"Jan", "Jan", "Feb", "Feb", "Mar", "Mar",
@@ -88,9 +90,57 @@ func translateIndoMonth(dateStr string) string {
 	return r.Replace(dateStr)
 }
 
-// Helper buat ambil nama merchant setelah label tertentu
-func extractMerchant(body string, label string) string {
-	// Logic sederhana: cari kata setelah "Penerima"
-	// Di aplikasi nyata, lu mungkin perlu library HTML parser kalau emailnya format HTML
-	return "Mandiri Transfer/QRIS" // Placeholder, bisa lu improve sesuai body emailnya
+func extractAmount(body string, keyword string) float64 {
+	// (?s) biar tembus newline, [^R]* biar cari angka setelah Rp
+	re := regexp.MustCompile(fmt.Sprintf(`(?s)%s[^R]*Rp\s?([\d\.,]+)`, keyword))
+	match := re.FindStringSubmatch(body)
+	if len(match) > 1 {
+		clean := strings.ReplaceAll(match[1], ".", "")
+		clean = strings.ReplaceAll(clean, ",", ".")
+		val, _ := strconv.ParseFloat(clean, 64)
+		return val
+	}
+	return 0
+}
+
+func extractMerchant(body string) string {
+	cleanBody := stripHTML(body)
+
+	// Regex ini ambil teks SETELAH 'Penerima', tapi BERHENTI kalau ketemu 2 spasi atau lebih
+	// karena di email Mandiri antar label biasanya dipisah spasi banyak
+	re := regexp.MustCompile(`(?i)(?:Penerima|Penyedia Jasa)\s*[:\s]+(.*?)(?:\s{2,}|$)`)
+	match := re.FindStringSubmatch(cleanBody)
+
+	if len(match) > 1 {
+		return strings.TrimSpace(match[1])
+	}
+	return "Merchant Tidak Terdeteksi"
+}
+
+func extractNote(body string) string {
+	cleanBody := stripHTML(body)
+
+	// Sama kayak merchant, ambil teks SETELAH 'Keterangan', berhenti kalau ketemu spasi double
+	re := regexp.MustCompile(`(?i)Keterangan\s*[:\s]+(.*?)(?:\s{2,}|$)`)
+	match := re.FindStringSubmatch(cleanBody)
+
+	if len(match) > 1 {
+		note := strings.TrimSpace(match[1])
+		if note != "" && note != "-" {
+			return note
+		}
+	}
+	return "-"
+}
+
+func stripHTML(input string) string {
+	re := regexp.MustCompile(`<[^>]*>`)
+	// Ganti tag HTML dengan "  " (dua spasi) biar ada pemisah antar kata yang tadinya beda kolom
+	clean := re.ReplaceAllString(input, "  ")
+
+	clean = strings.ReplaceAll(clean, "&nbsp;", " ")
+	// Hapus tab dan ganti ke spasi
+	clean = strings.ReplaceAll(clean, "\t", "  ")
+
+	return clean
 }

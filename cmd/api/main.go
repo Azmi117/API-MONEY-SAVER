@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/config"
 	delivery "github.com/Azmi117/API-MONEY-SAVER.git/internal/delivery/http"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/repository"
+	"github.com/Azmi117/API-MONEY-SAVER.git/internal/service"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/gemini"
 	"github.com/joho/godotenv"
@@ -22,34 +25,69 @@ func main() {
 
 	db := config.ConnectDB()
 
+	// ---------------------------------------------------------
 	// 0. PKG LAYER (External Clients)
+	// ---------------------------------------------------------
 	geminiApiKey := os.Getenv("GEMINI_API_KEY")
 	ctx := context.Background()
 	geminiClient, err := gemini.NewGeminiClient(ctx, geminiApiKey)
-
 	if err != nil {
 		log.Fatal("Gagal inisialisasi Gemini Client:", err)
 	}
 
+	// ---------------------------------------------------------
 	// 1. AUTH LAYER
+	// ---------------------------------------------------------
 	authRepo := repository.NewAuthRepository(db)
-	authUsecase := usecase.NewAuthUsecase(authRepo)
-	authHandler := delivery.NewAuthHandler(authUsecase)
+	googleAuthService := service.NewGoogleAuthService(authRepo)
 
-	// 2. WORKSPACE LAYER (Inisialisasi komponen baru)
+	authUsecase := usecase.NewAuthUsecase(authRepo)
+	authHandler := delivery.NewAuthHandler(authUsecase, googleAuthService)
+
+	// ---------------------------------------------------------
+	// 2. WORKSPACE LAYER
+	// ---------------------------------------------------------
 	wsRepo := repository.NewWorkspaceRepository(db)
-	wsUsecase := usecase.NewWorkspaceUsecase(wsRepo, authRepo) // Inject authRepo buat logic Tiering
+	wsUsecase := usecase.NewWorkspaceUsecase(wsRepo, authRepo)
 	wsHandler := delivery.NewWorkspaceHandler(wsUsecase)
 
-	// 3. TRANSACTION LAYER (Komponen Baru!)
+	// ---------------------------------------------------------
+	// 3. TRANSACTION LAYER
+	// ---------------------------------------------------------
 	txRepo := repository.NewTransactionRepository(db)
-	txUsecase := usecase.NewTransactionUsecase(txRepo, geminiClient)
+
+	// SEKARANG INJECT: txRepo, authRepo, googleAuthService, & geminiClient
+	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient)
 	txHandler := delivery.NewTransactionHandler(txUsecase)
 
-	mux := http.NewServeMux()
+	// ---------------------------------------------------------
+	// 4. THE ROBOT WORKER (Background Job)
+	// ---------------------------------------------------------
+	go func() {
+		// Kasih jeda 10 detik biar server utama beneran up dulu
+		time.Sleep(10 * time.Second)
 
-	// 4. MAP ROUTES
-	// Masukin wsHandler dan db sesuai signature MapRoutes yang baru
+		// Set ticker (Untuk testing: 1 menit, Production: 15-30 menit)
+		ticker := time.NewTicker(1 * time.Minute)
+		fmt.Println("🚀 [Robot Sync] Worker Gmail Aktif! Siap ngecek email tiap 1 menit...")
+
+		for range ticker.C {
+			fmt.Println("🤖 [Robot Sync] Scan email mutasi sedang berjalan...")
+
+			// Jalankan fungsi sinkronisasi yang kita buat di usecase
+			ctxSync, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			errSync := txUsecase.SyncGmailTransactions(ctxSync)
+			if errSync != nil {
+				log.Printf("❌ [Robot Sync] Error: %v\n", errSync)
+			}
+			cancel()
+		}
+	}()
+
+	// ---------------------------------------------------------
+	// 5. SERVER CONFIG & ROUTES
+	// ---------------------------------------------------------
+	mux := http.NewServeMux()
 	delivery.MapRoutes(mux, authHandler, wsHandler, txHandler, authRepo, db)
 
 	port := ":8080"

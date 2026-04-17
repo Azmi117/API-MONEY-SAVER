@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -9,17 +10,21 @@ import (
 	"time"
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
+	"github.com/Azmi117/API-MONEY-SAVER.git/internal/service"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
 )
 
 type authHandler struct {
-	usecase usecase.AuthUsecase
+	usecase           usecase.AuthUsecase
+	googleAuthService service.GoogleAuthService
 }
 
-func NewAuthHandler(params usecase.AuthUsecase) *authHandler {
+// Update constructor biar nerima googleAuthService juga
+func NewAuthHandler(params usecase.AuthUsecase, googleService service.GoogleAuthService) *authHandler {
 	return &authHandler{
-		usecase: params,
+		usecase:           params,
+		googleAuthService: googleService,
 	}
 }
 
@@ -35,6 +40,51 @@ func sendError(w http.ResponseWriter, err error) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Internal Server Error"})
 }
 
+// --- GOOGLE OAUTH HANDLERS ---
+
+func (h *authHandler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
+	// Ambil userID dari context (setelah lewat authMiddleware)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		sendError(w, apperror.Unauthorized("User tidak terautentikasi"))
+		return
+	}
+
+	// State kita isi userID buat identifikasi pas callback
+	url := h.googleAuthService.GetAuthURL(userID)
+	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+}
+
+func (h *authHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+
+	if code == "" {
+		sendError(w, apperror.BadRequest("Code dari Google tidak ditemukan"))
+		return
+	}
+
+	// Parsing state balik jadi userID
+	var userID uint
+	_, err := fmt.Sscanf(state, "%d", &userID)
+	if err != nil {
+		sendError(w, apperror.BadRequest("State tidak valid"))
+		return
+	}
+
+	// Tukar code jadi Refresh Token
+	err = h.googleAuthService.ExchangeCode(r.Context(), userID, code)
+	if err != nil {
+		sendError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte("<h1>Berhasil!</h1><p>Gmail Mandiri lo udah kekonek.</p>"))
+}
+
+// --- EXISTING HANDLERS ---
+
 func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// 1. Parse Form (Maks 5MB)
 	if err := r.ParseMultipartForm(5 << 20); err != nil {
@@ -43,24 +93,21 @@ func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Mapping sesuai Model User lo
-	// telegram_id harus di-convert dari string ke int
 	teleID, _ := strconv.Atoi(r.FormValue("telegram_id"))
 
 	input := models.User{
 		Name:               r.FormValue("name"),
 		Email:              r.FormValue("email"),
-		PasswordHash:       r.FormValue("password"), // Kita pake key "password" di form
+		PasswordHash:       r.FormValue("password"),
 		TelegramID:         teleID,
 		EmailParsingEnable: r.FormValue("email_parsing_enable") == "true",
 	}
 
 	// 3. Logika Avatar
-	// 3. Logika Avatar
 	file, header, err := r.FormFile("avatar")
 	if err == nil {
 		defer file.Close()
 
-		// Pastiin folder ada (Safety check tambahan)
 		if _, err := os.Stat("./uploads/avatar"); os.IsNotExist(err) {
 			os.MkdirAll("./uploads/avatar", os.ModePerm)
 		}
@@ -70,7 +117,6 @@ func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 		dst, err := os.Create(filePath)
 		if err != nil {
-			// Kalau gagal bikin file, kirim error ke Bruno, jangan diem aja!
 			sendError(w, apperror.Internal("Failed to save uploaded file: "+err.Error()))
 			return
 		}
@@ -83,12 +129,10 @@ func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 		input.Avatar = fileName
 	} else if err != http.ErrMissingFile {
-		// Kalau error-nya bukan karena file kosong, tapi karena hal lain
 		sendError(w, apperror.BadRequest("Error retrieving the uploaded file: "+err.Error()))
 		return
 	}
 
-	// 4. Gas ke Usecase
 	if err := h.usecase.Register(&input); err != nil {
 		sendError(w, err)
 		return
@@ -110,14 +154,12 @@ func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// UseCase Login sekarang return 2 token sesuai request lo
 	accessToken, refreshToken, err := h.usecase.Login(input.Email, input.Password)
 	if err != nil {
 		sendError(w, err)
 		return
 	}
 
-	// A. Set Cookie buat Access Token (15 Menit)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    accessToken,
@@ -127,12 +169,11 @@ func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	// B. Set Cookie buat Refresh Token (7 Hari)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    refreshToken,
 		HttpOnly: true,
-		Path:     "/", // Biar cuma dikirim pas mau refresh doang
+		Path:     "/",
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
 		SameSite: http.SameSiteLaxMode,
 	})
@@ -146,21 +187,18 @@ func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
 func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Ambil refresh_token dari cookie
 	cookie, err := r.Cookie("refresh_token")
 	if err != nil {
 		sendError(w, apperror.Unauthorized("Session expired, please login again!"))
 		return
 	}
 
-	// Panggil UseCase buat tuker refresh_token lama jadi access_token baru
 	newAccessToken, err := h.usecase.RefreshToken(cookie.Value)
 	if err != nil {
 		sendError(w, err)
 		return
 	}
 
-	// Set Access Token baru ke cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    newAccessToken,
@@ -175,18 +213,13 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 func (h *authHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// 1. Ambil token dari cookie buat di-blacklist/hapus di DB
 	atCookie, errAT := r.Cookie("access_token")
 	rtCookie, errRT := r.Cookie("refresh_token")
 
-	// Kalau ada tokennya, panggil Usecase buat urusan database
 	if errAT == nil && errRT == nil {
-		// Panggil Logout Sultan (Hapus RT di DB & Blacklist AT)
 		h.usecase.Logout(atCookie.Value, rtCookie.Value)
 	}
 
-	// 2. Kirim instruksi ke browser buat hapus cookie (Client-side)
-	// Hapus Access Token
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    "",
@@ -196,7 +229,6 @@ func (h *authHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 
-	// Hapus Refresh Token
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    "",

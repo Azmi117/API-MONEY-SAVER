@@ -14,6 +14,7 @@ type TransactionRepository interface {
 	UpdateStatus(id uint, status string) error
 	GetByWorkspaceID(workspaceID uint) ([]models.Transaction, error)
 	Delete(id uint) error
+	GetByGmailID(gmailID string) (*models.Transaction, error)
 }
 
 type transactionRepository struct {
@@ -64,4 +65,13 @@ func (r *transactionRepository) Delete(id uint) error {
 	// Kita pake Unscoped() kalau lu mau bener-bener hapus dari DB (Hard Delete)
 	// Kalau di model Transaction lu pake gorm.Model, dia otomatis Soft Delete
 	return r.db.Delete(&models.Transaction{}, id).Error
+}
+
+func (r *transactionRepository) GetByGmailID(gmailID string) (*models.Transaction, error) {
+	var tx models.Transaction
+	err := r.db.Where("gmail_id = ?", gmailID).First(&tx).Error
+	if err != nil {
+		return nil, err
+	}
+	return &tx, nil
 }
