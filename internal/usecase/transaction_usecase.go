@@ -11,7 +11,9 @@ import (
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/repository"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/service"
+	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/gemini"
+	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/ocr"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/utils"
 	"google.golang.org/api/gmail/v1"
 )
@@ -24,6 +26,7 @@ type TransactionUsecase interface {
 	ProcessEmailMandiri(ctx context.Context, userID uint, workspaceID uint, subject string, body string) (*models.Transaction, error)
 	GetHistory(workspaceID uint) ([]models.Transaction, error)
 	DeleteTransaction(transactionID uint) error
+	ProcessScanHybrid2(ctx context.Context, userID uint, workspaceID uint, imgData []byte, mimeType string) (*dto.ProcessScanHybridResult, error)
 }
 
 type transactionUsecase struct {
@@ -31,26 +34,27 @@ type transactionUsecase struct {
 	authRepo      repository.AuthRepository
 	googleService service.GoogleAuthService
 	geminiClient  *gemini.GeminiClient
+	hybridScanner *ocr.HybridScanner
 }
 
-func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient) TransactionUsecase {
+func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner) TransactionUsecase {
 	return &transactionUsecase{
 		repo:          repo,
 		authRepo:      authRepo,
 		googleService: googleService,
 		geminiClient:  gemini,
+		hybridScanner: hybridScanner,
 	}
 }
 
-// 1. Logic buat input manual
 func (u *transactionUsecase) CreateManual(ctx context.Context, userID uint, req dto.CreateTransactionRequest) error {
 	cleanMerchant := strings.ToLower(strings.TrimSpace(req.Merchant))
 	isDuplicate, err := u.repo.IsDuplicate(req.WorkspaceID, req.Amount, cleanMerchant, req.Date)
 	if err != nil {
-		return err
+		return apperror.Internal("Failed to check transaction duplicates!")
 	}
 	if isDuplicate {
-		return fmt.Errorf("transaksi serupa sudah tercatat (duplikat merchant: %s)", cleanMerchant)
+		return apperror.Conflict("Similar transaction has already been recorded!")
 	}
 
 	tx := &models.Transaction{
@@ -66,15 +70,17 @@ func (u *transactionUsecase) CreateManual(ctx context.Context, userID uint, req 
 		Status:      "approved",
 	}
 
-	return u.repo.Create(tx)
+	if err := u.repo.Create(tx); err != nil {
+		return apperror.Internal("Failed to save manual transaction!")
+	}
+
+	return nil
 }
 
-// 2. Logic buat scan struk pake Gemini
 func (u *transactionUsecase) ProcessScan(ctx context.Context, userID uint, workspaceID uint, imgData []byte, mimeType string) (*models.Transaction, error) {
-	// 1. Panggil Gemini buat scan
 	result, err := u.geminiClient.ScanReceipt(ctx, imgData, mimeType)
 	if err != nil {
-		return nil, err
+		return nil, apperror.Internal("Gemini AI failed to process receipt scan!")
 	}
 
 	cleanMerchant := strings.Title(strings.ToLower(strings.TrimSpace(result.Merchant)))
@@ -84,23 +90,21 @@ func (u *transactionUsecase) ProcessScan(ctx context.Context, userID uint, works
 		parsedDate = time.Now()
 	}
 
-	// 2. Siapkan struct Transaction utama
 	tx := &models.Transaction{
-		UserID:      userID,
-		WorkspaceID: workspaceID,
-		Amount:      result.Amount,
-		Merchant:    cleanMerchant,
-		Method:      result.Method,
-		Note:        result.Note,
-		Date:        parsedDate,
-		Type:        result.Type,
-		Source:      "scan",
-		Status:      "pending",
-		// Inisialisasi slice buat nampung item
+		UserID:           userID,
+		WorkspaceID:      workspaceID,
+		Amount:           result.Amount,
+		Merchant:         cleanMerchant,
+		Method:           result.Method,
+		Note:             result.Note,
+		Date:             parsedDate,
+		Type:             result.Type,
+		Source:           "scan",
+		Status:           "pending",
+		GmailID:          fmt.Sprintf("SCAN-%d", time.Now().UnixNano()),
 		TransactionItems: []models.TransactionItem{},
 	}
 
-	// 3. Mapping Item dari Gemini (ResultScan) ke Model Database (TransactionItem)
 	for _, item := range result.Items {
 		tx.TransactionItems = append(tx.TransactionItems, models.TransactionItem{
 			Description: item.Description,
@@ -110,27 +114,22 @@ func (u *transactionUsecase) ProcessScan(ctx context.Context, userID uint, works
 		})
 	}
 
-	// 4. Simpan ke Repo.
-	// Karena lo pake GORM db.Create(tx), GORM bakal otomatis
-	// simpan Transaction dulu, ambil ID-nya, lalu simpan semua TransactionItems.
 	if err := u.repo.Create(tx); err != nil {
-		return nil, fmt.Errorf("gagal simpan draft scan beserta item: %v", err)
+		return nil, apperror.Internal("Failed to save scanned transaction and items!")
 	}
 
 	return tx, nil
 }
 
-// 3. Sync Gmail (THE ROBOT)
 func (u *transactionUsecase) SyncGmailTransactions(ctx context.Context) error {
 	users, err := u.authRepo.FindAllWithGmail()
 	if err != nil {
-		return err
+		return apperror.Internal("Failed to retrieve users with Gmail integration!")
 	}
 
 	for _, user := range users {
 		srv, err := u.googleService.GetGmailService(user.GoogleRefreshToken)
 		if err != nil {
-			fmt.Printf("Gagal dapet Gmail service buat user %d: %v\n", user.ID, err)
 			continue
 		}
 
@@ -153,7 +152,6 @@ func (u *transactionUsecase) SyncGmailTransactions(ctx context.Context) error {
 				continue
 			}
 
-			// Get Subject
 			var subject string
 			for _, h := range fullMsg.Payload.Headers {
 				if h.Name == "Subject" {
@@ -161,21 +159,16 @@ func (u *transactionUsecase) SyncGmailTransactions(ctx context.Context) error {
 				}
 			}
 
-			// --- FIX: Logic Ambil Body yang Lebih Sakti ---
 			bodyStr := u.getBody(fullMsg.Payload)
-
-			// DEBUG: Aktifkan ini kalau mau liat isi email asli di terminal
-			// fmt.Printf("\n--- BODY EMAIL (%s) ---\n%s\n------------------\n", m.Id, bodyStr)
-
 			parsed := utils.ParseMandiriEmail(subject, bodyStr)
 			if parsed != nil {
 				tx := &models.Transaction{
 					UserID:      user.ID,
-					WorkspaceID: 1, // Workspace default
+					WorkspaceID: 1,
 					Amount:      parsed.Amount,
-					Merchant:    parsed.Merchant, // Nama Penerima (Diva Puti, etc)
-					Method:      parsed.Method,   // Transfer / QRIS / Top-up
-					Note:        parsed.Note,     // Pesan/Keterangan asli
+					Merchant:    parsed.Merchant,
+					Method:      parsed.Method,
+					Note:        parsed.Note,
 					Date:        parsed.Date,
 					Type:        "expense",
 					Source:      "email_auto",
@@ -183,33 +176,23 @@ func (u *transactionUsecase) SyncGmailTransactions(ctx context.Context) error {
 					GmailID:     m.Id,
 				}
 
-				if err := u.repo.Create(tx); err != nil {
-					fmt.Printf("Gagal simpan transaksi: %v\n", err)
-					continue
-				}
-
-				// Log terminal yang lebih informatif buat lo pantau
-				fmt.Printf("✅ Berhasil Sync: [%s] Ke: %s | Rp%.2f | Pesan: %s\n",
-					parsed.Method, parsed.Merchant, parsed.Amount, parsed.Note)
+				_ = u.repo.Create(tx)
 			}
 		}
 	}
 	return nil
 }
 
-// Helper untuk bongkar body email Gmail yang berlapis-lapis
 func (u *transactionUsecase) getBody(payload *gmail.MessagePart) string {
 	data := ""
 	if payload.Body.Data != "" {
 		data = payload.Body.Data
 	} else {
-		// Cari di dalam Parts kalau body utama kosong
 		for _, part := range payload.Parts {
 			if part.MimeType == "text/plain" || part.MimeType == "text/html" {
 				data = part.Body.Data
 				break
 			}
-			// Kalau masih nested, rekursif tipis-tipis
 			if len(part.Parts) > 0 {
 				data = u.getBody(part)
 				if data != "" {
@@ -226,7 +209,7 @@ func (u *transactionUsecase) getBody(payload *gmail.MessagePart) string {
 func (u *transactionUsecase) ProcessEmailMandiri(ctx context.Context, userID uint, workspaceID uint, subject string, body string) (*models.Transaction, error) {
 	parsed := utils.ParseMandiriEmail(subject, body)
 	if parsed == nil {
-		return nil, fmt.Errorf("email bukan format transaksi Mandiri yang didukung")
+		return nil, apperror.UnprocessableEntity("Email format is not a supported Mandiri transaction!")
 	}
 
 	tx := &models.Transaction{
@@ -241,19 +224,92 @@ func (u *transactionUsecase) ProcessEmailMandiri(ctx context.Context, userID uin
 	}
 
 	if err := u.repo.Create(tx); err != nil {
-		return nil, err
+		return nil, apperror.Internal("Failed to save email-processed transaction!")
 	}
 	return tx, nil
 }
 
+func (u *transactionUsecase) ProcessScanHybrid2(ctx context.Context, userID uint, workspaceID uint, imgData []byte, mimeType string) (*dto.ProcessScanHybridResult, error) {
+	result, err := u.hybridScanner.ScanReceiptHybrid(ctx, imgData, mimeType)
+	if err != nil {
+		return nil, apperror.Internal("Hybrid scanner failed to process image!")
+	}
+
+	cleanMerchant := strings.Title(strings.ToLower(strings.TrimSpace(result.Merchant)))
+
+	parsedDate := time.Now()
+	if strings.TrimSpace(result.Date) != "" {
+		layouts := []string{
+			"2006-01-02 15:04:05",
+			"2006-01-02 15:04",
+			"2006-01-02",
+		}
+
+		for _, layout := range layouts {
+			t, parseErr := time.Parse(layout, result.Date)
+			if parseErr == nil {
+				parsedDate = t
+				break
+			}
+		}
+	}
+
+	tx := &models.Transaction{
+		UserID:           userID,
+		WorkspaceID:      workspaceID,
+		Amount:           result.Amount,
+		Merchant:         cleanMerchant,
+		Method:           result.Method,
+		Note:             result.Note,
+		Date:             parsedDate,
+		Type:             result.Type,
+		Source:           result.Source,
+		Status:           "pending",
+		GmailID:          fmt.Sprintf("SCAN-%d", time.Now().UnixNano()),
+		TransactionItems: []models.TransactionItem{},
+	}
+
+	for _, item := range result.Items {
+		tx.TransactionItems = append(tx.TransactionItems, models.TransactionItem{
+			Description: item.Description,
+			Quantity:    item.Quantity,
+			Price:       item.UnitPrice,
+			Total:       item.Total,
+		})
+	}
+
+	if err := u.repo.Create(tx); err != nil {
+		return nil, apperror.Internal("Failed to save hybrid scan result!")
+	}
+
+	return &dto.ProcessScanHybridResult{
+		Transaction:  tx,
+		Engine:       result.Engine,
+		Confidence:   result.Confidence,
+		FallbackUsed: result.FallbackUsed,
+	}, nil
+}
+
 func (u *transactionUsecase) ConfirmTransaction(ctx context.Context, transactionID uint) error {
-	return u.repo.UpdateStatus(transactionID, "approved")
+	err := u.repo.UpdateStatus(transactionID, "approved")
+	if err != nil {
+		return apperror.NotFound("Transaction record not found to confirm!")
+	}
+	return nil
 }
 
 func (u *transactionUsecase) GetHistory(workspaceID uint) ([]models.Transaction, error) {
-	return u.repo.GetByWorkspaceID(workspaceID)
+	history, err := u.repo.GetByWorkspaceID(workspaceID)
+	if err != nil {
+		return nil, apperror.Internal("Failed to retrieve transaction history!")
+	}
+	return history, nil
 }
 
 func (u *transactionUsecase) DeleteTransaction(transactionID uint) error {
-	return u.repo.Delete(transactionID)
+	err := u.repo.Delete(transactionID)
+	if err != nil {
+		return apperror.NotFound("Transaction not found or already deleted!")
+	}
+	return nil
 }

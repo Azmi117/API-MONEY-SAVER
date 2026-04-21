@@ -28,25 +28,13 @@ func NewAuthHandler(params usecase.AuthUsecase, googleService service.GoogleAuth
 	}
 }
 
-func sendError(w http.ResponseWriter, err error) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if appErr, ok := err.(*apperror.Apperror); ok {
-		w.WriteHeader(appErr.Code)
-		json.NewEncoder(w).Encode(appErr)
-		return
-	}
-	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Internal Server Error"})
-}
-
 // --- GOOGLE OAUTH HANDLERS ---
 
 func (h *authHandler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	// Ambil userID dari context (setelah lewat authMiddleware)
 	userID, ok := r.Context().Value("user_id").(uint)
 	if !ok {
-		sendError(w, apperror.Unauthorized("User tidak terautentikasi"))
+		SendError(w, apperror.Unauthorized("User tidak terautentikasi"))
 		return
 	}
 
@@ -60,7 +48,7 @@ func (h *authHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 
 	if code == "" {
-		sendError(w, apperror.BadRequest("Code dari Google tidak ditemukan"))
+		SendError(w, apperror.BadRequest("Code dari Google tidak ditemukan"))
 		return
 	}
 
@@ -68,14 +56,14 @@ func (h *authHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 	var userID uint
 	_, err := fmt.Sscanf(state, "%d", &userID)
 	if err != nil {
-		sendError(w, apperror.BadRequest("State tidak valid"))
+		SendError(w, apperror.BadRequest("State tidak valid"))
 		return
 	}
 
 	// Tukar code jadi Refresh Token
 	err = h.googleAuthService.ExchangeCode(r.Context(), userID, code)
 	if err != nil {
-		sendError(w, err)
+		SendError(w, err)
 		return
 	}
 
@@ -88,7 +76,7 @@ func (h *authHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// 1. Parse Form (Maks 5MB)
 	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		sendError(w, apperror.BadRequest("File too large. Maximum size allowed is 5MB!"))
+		SendError(w, apperror.BadRequest("File too large. Maximum size allowed is 5MB!"))
 		return
 	}
 
@@ -117,24 +105,24 @@ func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 		dst, err := os.Create(filePath)
 		if err != nil {
-			sendError(w, apperror.Internal("Failed to save uploaded file: "+err.Error()))
+			SendError(w, apperror.Internal("Failed to save uploaded file: "+err.Error()))
 			return
 		}
 		defer dst.Close()
 
 		if _, err := io.Copy(dst, file); err != nil {
-			sendError(w, apperror.Internal("Failed to save uploaded file.: "+err.Error()))
+			SendError(w, apperror.Internal("Failed to save uploaded file.: "+err.Error()))
 			return
 		}
 
 		input.Avatar = fileName
 	} else if err != http.ErrMissingFile {
-		sendError(w, apperror.BadRequest("Error retrieving the uploaded file: "+err.Error()))
+		SendError(w, apperror.BadRequest("Error retrieving the uploaded file: "+err.Error()))
 		return
 	}
 
 	if err := h.usecase.Register(&input); err != nil {
-		sendError(w, err)
+		SendError(w, err)
 		return
 	}
 
@@ -150,13 +138,13 @@ func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		sendError(w, apperror.BadRequest("JSON Error"))
+		SendError(w, apperror.BadRequest("JSON Error"))
 		return
 	}
 
 	accessToken, refreshToken, err := h.usecase.Login(input.Email, input.Password)
 	if err != nil {
-		sendError(w, err)
+		SendError(w, err)
 		return
 	}
 
@@ -189,13 +177,13 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	cookie, err := r.Cookie("refresh_token")
 	if err != nil {
-		sendError(w, apperror.Unauthorized("Session expired, please login again!"))
+		SendError(w, apperror.Unauthorized("Session expired, please login again!"))
 		return
 	}
 
 	newAccessToken, err := h.usecase.RefreshToken(cookie.Value)
 	if err != nil {
-		sendError(w, err)
+		SendError(w, err)
 		return
 	}
 

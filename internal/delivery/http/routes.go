@@ -48,4 +48,5 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("DELETE "+prefix+"transactions", authMW(tH.Delete))
 	mux.HandleFunc("POST "+prefix+"transactions/scan", authMW(tH.ScanReceipt))
 	mux.HandleFunc("PATCH "+prefix+"transactions/confirm", authMW(tH.Confirm))
+	mux.HandleFunc("POST "+prefix+"transactions/scan-hybrid2", authMW(tH.ScanReceiptHybrid))
 }

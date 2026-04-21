@@ -14,6 +14,7 @@ import (
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/service"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/gemini"
+	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/ocr"
 	"github.com/joho/godotenv"
 )
 
@@ -55,9 +56,11 @@ func main() {
 	// 3. TRANSACTION LAYER
 	// ---------------------------------------------------------
 	txRepo := repository.NewTransactionRepository(db)
+	tesseractClient := ocr.NewTesseractClient()
+	hybridScanner := ocr.NewHybridScanner(tesseractClient, geminiClient)
 
 	// SEKARANG INJECT: txRepo, authRepo, googleAuthService, & geminiClient
-	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient)
+	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner)
 	txHandler := delivery.NewTransactionHandler(txUsecase)
 
 	// ---------------------------------------------------------

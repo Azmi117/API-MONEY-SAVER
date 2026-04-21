@@ -14,6 +14,7 @@ import (
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/dto"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
+	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
 	"github.com/jaytaylor/html2text"
 )
 
@@ -28,13 +29,13 @@ func NewTransactionHandler(u usecase.TransactionUsecase) *TransactionHandler {
 // 1. POST /transactions/manual
 func (h *TransactionHandler) CreateManual(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST!"))
 		return
 	}
 
 	var req dto.CreateTransactionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Payload tidak valid", http.StatusBadRequest)
+		SendError(w, apperror.BadRequest("Invalid payload!"))
 		return
 	}
 
@@ -43,19 +44,18 @@ func (h *TransactionHandler) CreateManual(w http.ResponseWriter, r *http.Request
 
 	err := h.usecase.CreateManual(r.Context(), userID, req)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, apperror.Internal(err.Error()))
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Transaksi manual berhasil dicatat"})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Success record manual transaction"})
 }
 
 // 2. GET /transactions/history?workspace_id=1
 func (h *TransactionHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, use GET!"))
 		return
 	}
 
@@ -64,8 +64,7 @@ func (h *TransactionHandler) GetHistory(w http.ResponseWriter, r *http.Request) 
 
 	history, err := h.usecase.GetHistory(uint(workspaceID))
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, apperror.Internal(err.Error()))
 		return
 	}
 
@@ -76,7 +75,7 @@ func (h *TransactionHandler) GetHistory(w http.ResponseWriter, r *http.Request) 
 // 3. DELETE /transactions/delete?id=1
 func (h *TransactionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, use DELETE!"))
 		return
 	}
 
@@ -85,8 +84,7 @@ func (h *TransactionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	err := h.usecase.DeleteTransaction(uint(id))
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, apperror.Internal(err.Error()))
 		return
 	}
 
@@ -98,13 +96,13 @@ func (h *TransactionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *TransactionHandler) EmailMandiriWebhook(w http.ResponseWriter, r *http.Request) {
 	// 1. Validasi Method
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST!"))
 		return
 	}
 
 	// 2. Validasi Secret (Samain sama di Cloudflare & .env)
 	if r.Header.Get("X-Webhook-Secret") != os.Getenv("WEBHOOK_SECRET") {
-		http.Error(w, "Unauthorized: Secret key salah", http.StatusUnauthorized)
+		SendError(w, apperror.Unauthorized("Invalid Secret Key"))
 		return
 	}
 
@@ -116,7 +114,7 @@ func (h *TransactionHandler) EmailMandiriWebhook(w http.ResponseWriter, r *http.
 
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		log.Printf("[Webhook Error] Gagal decode JSON: %v", err)
-		http.Error(w, "Gagal decode email", http.StatusBadRequest)
+		SendError(w, apperror.BadRequest("Failed decode Email!"))
 		return
 	}
 
@@ -126,7 +124,7 @@ func (h *TransactionHandler) EmailMandiriWebhook(w http.ResponseWriter, r *http.
 	var finalBody string
 
 	if err != nil {
-		log.Printf("[Webhook Warning] Bukan format RFC822, pake body mentah: %v", err)
+		log.Printf("[Webhook Warning] Not RFC822 format, use raw body: %v", err)
 		finalBody = payload.Body
 	} else {
 		// Cek apakah emailnya multipart (ada HTML + Plain Text)
@@ -164,7 +162,7 @@ func (h *TransactionHandler) EmailMandiriWebhook(w http.ResponseWriter, r *http.
 		log.Printf("[Webhook Error] Usecase Gagal: %v", err)
 		log.Printf("[Webhook Debug] Plain Body yg bikin gagal: %s", plainBody)
 
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SendError(w, apperror.Internal(err.Error()))
 		return
 	}
 
@@ -177,19 +175,19 @@ func (h *TransactionHandler) EmailMandiriWebhook(w http.ResponseWriter, r *http.
 // 5. POST /transactions/scan
 func (h *TransactionHandler) ScanReceipt(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST!"))
 		return
 	}
 
 	// Limit upload 5MB
 	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		http.Error(w, "File terlalu besar", http.StatusBadRequest)
+		SendError(w, apperror.BadRequest("File size is bigger than 5MB, reduce file size!"))
 		return
 	}
 
 	file, header, err := r.FormFile("image")
 	if err != nil {
-		http.Error(w, "Gambar tidak ditemukan", http.StatusBadRequest)
+		SendError(w, apperror.BadRequest("Image not found!"))
 		return
 	}
 	defer file.Close()
@@ -197,13 +195,13 @@ func (h *TransactionHandler) ScanReceipt(w http.ResponseWriter, r *http.Request)
 	// Cek MIME Type
 	contentType := header.Header.Get("Content-Type")
 	if !strings.HasPrefix(contentType, "image/") {
-		http.Error(w, "File harus berupa gambar", http.StatusBadRequest)
+		SendError(w, apperror.BadRequest("File must be an image!"))
 		return
 	}
 
 	imgData, err := io.ReadAll(file)
 	if err != nil {
-		http.Error(w, "Gagal membaca gambar", http.StatusInternalServerError)
+		SendError(w, apperror.Internal("Failed load image!"))
 		return
 	}
 
@@ -213,15 +211,13 @@ func (h *TransactionHandler) ScanReceipt(w http.ResponseWriter, r *http.Request)
 	tx, err := h.usecase.ProcessScan(r.Context(), userID, uint(wsID), imgData, contentType)
 	if err != nil {
 		// Balikin JSON error manual biar frontend gampang baca
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, apperror.Internal(err.Error()))
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "Struk berhasil di-scan",
+		"message": "Success scan receipt!",
 		"data":    tx,
 	})
 }
@@ -229,7 +225,7 @@ func (h *TransactionHandler) ScanReceipt(w http.ResponseWriter, r *http.Request)
 // 6. PATCH /transactions/confirm?id=1
 func (h *TransactionHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPatch {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, use PATCH!"))
 		return
 	}
 
@@ -238,10 +234,65 @@ func (h *TransactionHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 
 	err := h.usecase.ConfirmTransaction(r.Context(), uint(id))
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, apperror.Internal(err.Error()))
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"message": "Transaksi berhasil dikonfirmasi"})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Success confirm transaction"})
+}
+
+func (h *TransactionHandler) ScanReceiptHybrid(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST!"))
+		return
+	}
+
+	if err := r.ParseMultipartForm(5 << 20); err != nil {
+		SendError(w, apperror.BadRequest("File size is bigger than 5MB, reduce file size!"))
+		return
+	}
+
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		SendError(w, apperror.BadRequest("Image not found!"))
+		return
+	}
+	defer file.Close()
+
+	contentType := header.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, "image/") {
+		SendError(w, apperror.BadRequest("File must be an image!"))
+		return
+	}
+
+	imgData, err := io.ReadAll(file)
+	if err != nil {
+		SendError(w, apperror.Internal("Failed load image!"))
+		return
+	}
+
+	wsID, _ := strconv.Atoi(r.FormValue("workspace_id"))
+
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Unauthorized"))
+		return
+	}
+
+	result, err := h.usecase.ProcessScanHybrid2(r.Context(), userID, uint(wsID), imgData, contentType)
+	if err != nil {
+		SendError(w, apperror.Internal(err.Error()))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Success scan receipt (hybrid)",
+		"data":    result.Transaction,
+		"meta": map[string]interface{}{
+			"engine":        result.Engine,
+			"confidence":    result.Confidence,
+			"fallback_used": result.FallbackUsed,
+		},
+	})
 }

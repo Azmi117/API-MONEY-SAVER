@@ -87,10 +87,10 @@ func (g *GeminiClient) ScanReceipt(ctx context.Context, imgData []byte, mimeType
 	for _, part := range resp.Candidates[0].Content.Parts {
 		if txt, ok := part.(genai.Text); ok {
 			rawText := string(txt)
-			fmt.Printf("📝 [Gemini] Raw AI Response:\n%s\n", rawText)
+			// fmt.Printf("📝 [Gemini] Raw AI Response:\n%s\n", rawText)
 
 			cleanJSON := formatJSON(rawText)
-			fmt.Printf("🧹 [Gemini] Cleaned JSON: %s\n", cleanJSON)
+			// fmt.Printf("🧹 [Gemini] Cleaned JSON: %s\n", cleanJSON)
 
 			err := json.Unmarshal([]byte(cleanJSON), &result)
 			if err != nil {
@@ -112,6 +112,50 @@ func (g *GeminiClient) ScanReceipt(ctx context.Context, imgData []byte, mimeType
 
 	fmt.Println("⚠️ [Gemini] Tidak ditemukan teks dalam respon")
 	return nil, fmt.Errorf("AI tidak memberikan jawaban dalam format teks")
+}
+
+// Struct khusus untuk respon Hybrid
+type OCRFixResponse struct {
+	Merchant    string  `json:"merchant"`
+	TotalAmount float64 `json:"total_amount"`
+}
+
+func (g *GeminiClient) FixAndParseOCR(ctx context.Context, rawText string) (*OCRFixResponse, error) {
+	// Pake 2.0 Flash biar ngebut
+	model := g.client.GenerativeModel("models/gemini-2.5-flash")
+
+	prompt := fmt.Sprintf(`
+		Analyze this messy OCR text from an Indonesian receipt.
+		Fix typos (e.g. '0' to 'O', 'I' to '1') and extract:
+		1. Merchant Name
+		2. Total Amount (the final price paid)
+
+		OCR TEXT:
+		"""%s"""
+
+		Return ONLY JSON:
+		{"merchant": "string", "total_amount": number}
+	`, rawText)
+
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
+		for _, part := range resp.Candidates[0].Content.Parts {
+			if txt, ok := part.(genai.Text); ok {
+				// Gunakan fungsi formatJSON yang udah lo punya buat bersihin backticks
+				cleanJSON := formatJSON(string(txt))
+				var result OCRFixResponse
+				if err := json.Unmarshal([]byte(cleanJSON), &result); err != nil {
+					return nil, err
+				}
+				return &result, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("AI empty response")
 }
 
 // Helper buat bersihin backticks ```json dari AI

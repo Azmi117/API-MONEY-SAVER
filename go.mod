@@ -8,6 +8,7 @@ require (
 	github.com/jaytaylor/html2text v0.0.0-20260303211410-1a4bdc82ecec
 	github.com/joho/godotenv v1.5.1
 	github.com/matthewhartstonge/argon2 v1.5.0
+	github.com/otiai10/gosseract/v2 v2.4.1
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.275.0
 	gorm.io/driver/postgres v1.6.0
