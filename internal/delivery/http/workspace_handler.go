@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"time"
 
+	"github.com/Azmi117/API-MONEY-SAVER.git/internal/dto"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
 )
@@ -14,41 +14,9 @@ type WorkspaceHandler struct {
 	usecase usecase.WorkspaceUsecase
 }
 
-// ==========================================
-// DATA TRANSFER OBJECTS (DTO)
-// ==========================================
-
-type WorkspaceResponse struct {
-	ID        uint      `json:"id"`
-	Name      string    `json:"name"`
-	OwnerID   uint      `json:"owner_id"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 type UpdateWorkspaceRequest struct {
 	Name string `json:"name"`
 }
-
-// ==========================================
-// HELPER FUNCTION
-// ==========================================
-
-func SendError(w http.ResponseWriter, err error) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if appErr, ok := err.(*apperror.Apperror); ok {
-		w.WriteHeader(appErr.Code)
-		json.NewEncoder(w).Encode(appErr)
-		return
-	}
-
-	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Internal Server Error"})
-}
-
-// ==========================================
-// HANDLER LOGIC
-// ==========================================
 
 func NewWorkspaceHandler(u usecase.WorkspaceUsecase) *WorkspaceHandler {
 	return &WorkspaceHandler{usecase: u}
@@ -87,7 +55,7 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Mapping dari 'ws' (model GORM) ke 'response' (DTO)
-	response := WorkspaceResponse{
+	response := dto.WorkspaceResponse{
 		ID:        ws.ID,
 		Name:      ws.Name,
 		OwnerID:   ws.OwnerID,

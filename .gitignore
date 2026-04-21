@@ -1,4 +1,12 @@
 .env
+
+tmp/
+*.exe
+*.log
+dist/
+build/
+bin/
+
 uploads/**/*
 !uploads/.gitkeep
 !uploads/avatar/

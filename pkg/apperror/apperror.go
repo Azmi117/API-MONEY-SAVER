@@ -59,3 +59,10 @@ func MethodNotAllowed(msg string) error {
 		Message: msg,
 	}
 }
+
+func Conflict(msg string) error {
+	return &Apperror{
+		Code:    http.StatusConflict, // 409
+		Message: msg,
+	}
+}
