@@ -12,12 +12,16 @@ type User struct {
 	Email              string    `gorm:"type:varchar(100);uniqueIndex;not null" json:"email"`
 	PasswordHash       string    `gorm:"type:varchar(255);not null" json:"-"`
 	Avatar             string    `gorm:"type:varchar(255);default:'default-avatar.png'" json:"avatar"`
-	TelegramID         int       `gorm:"uniqueIndex" json:"telegram_id"`
+	TelegramID         *int      `gorm:"uniqueIndex" json:"telegram_id"`
 	EmailParsingEnable bool      `gorm:"default:false" json:"email_parsing_enable"`
 	AccountTier        string    `gorm:"type:varchar(20);default:'free'" json:"account_tier"`
 	GmailEnabled       bool      `gorm:"default:false" json:"gmail_enabled"`
 	GoogleRefreshToken string    `gorm:"type:text" json:"-"`
 	GoogleTokenExpires time.Time `json:"-"`
+	OCRUsageCount      int       `gorm:"default:0"`
+	LastResetUsage     time.Time
+	BindingCode        *string `gorm:"size:20;index"`
+	BindingExpiresAt   *time.Time
 
 	// --- RELATIONSHIPS (Dua Arah) ---
 	OwnedWorkspaces     []Workspace           `gorm:"foreignKey:OwnerID"`

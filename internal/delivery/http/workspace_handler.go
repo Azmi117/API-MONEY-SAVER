@@ -140,60 +140,69 @@ func (h *WorkspaceHandler) DeleteWorkspace(w http.ResponseWriter, r *http.Reques
 }
 
 // 5. INVITE MEMBER
+// 5. INVITE MEMBER
 func (h *WorkspaceHandler) Invite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST"))
 		return
 	}
 
+	// Ambil WorkspaceID dari Path Parameter (Go 1.22+ style)
+	wsIDStr := r.PathValue("id")
+	wsID, _ := strconv.ParseUint(wsIDStr, 10, 32)
+
 	var input struct {
-		WorkspaceID   uint `json:"workspace_id"`
-		InvitedUserID uint `json:"invited_user_id"`
+		Email string `json:"email"` // Sekarang pake Email
 	}
-	json.NewDecoder(r.Body).Decode(&input)
+
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		SendError(w, apperror.BadRequest("Invalid JSON format"))
+		return
+	}
 
 	ownerID := r.Context().Value("user_id").(uint)
 
-	err := h.usecase.InviteMember(input.WorkspaceID, ownerID, input.InvitedUserID)
+	// Kirim Email ke Usecase
+	err := h.usecase.InviteMember(uint(wsID), ownerID, input.Email)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Invitation sent successfully"})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Invitation sent successfully to " + input.Email})
 }
 
 // 6. RESPOND TO INVITATION (Accept/Reject)
-func (h *WorkspaceHandler) RespondInvitation(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST!"))
-		return
-	}
-
-	var input struct {
-		InvitationID uint `json:"invitation_id"`
-		Accept       bool `json:"accept"`
-	}
-	json.NewDecoder(r.Body).Decode(&input)
-
+// 6A. ACCEPT INVITATION
+func (h *WorkspaceHandler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
+	// Ambil ID dari URL Path
+	invIDStr := r.PathValue("id")
+	invID, _ := strconv.ParseUint(invIDStr, 10, 32)
 	userID := r.Context().Value("user_id").(uint)
 
-	err := h.usecase.RespondToInvitation(input.InvitationID, userID, input.Accept)
+	err := h.usecase.AcceptInvitation(uint(invID), userID)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, err)
 		return
-	}
-
-	msg := "Invitation rejected!"
-	if input.Accept {
-		msg = "Successful join workspace!"
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": msg})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Successfully joined the workspace!"})
+}
+
+// 6B. REJECT INVITATION
+func (h *WorkspaceHandler) RejectInvitation(w http.ResponseWriter, r *http.Request) {
+	invIDStr := r.PathValue("id")
+	invID, _ := strconv.ParseUint(invIDStr, 10, 32)
+	userID := r.Context().Value("user_id").(uint)
+
+	err := h.usecase.RejectInvitation(uint(invID), userID)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Invitation rejected!"})
 }

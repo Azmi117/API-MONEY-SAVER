@@ -15,6 +15,7 @@ type TransactionRepository interface {
 	GetByWorkspaceID(workspaceID uint) ([]models.Transaction, error)
 	Delete(id uint) error
 	GetByGmailID(gmailID string) (*models.Transaction, error)
+	HardDelete(id uint) error
 }
 
 type transactionRepository struct {
@@ -74,4 +75,9 @@ func (r *transactionRepository) GetByGmailID(gmailID string) (*models.Transactio
 		return nil, err
 	}
 	return &tx, nil
+}
+
+func (r *transactionRepository) HardDelete(id uint) error {
+	// Unscoped() bikin perintah SQL jadi: DELETE FROM transactions WHERE id = ?
+	return r.db.Unscoped().Delete(&models.Transaction{}, id).Error
 }

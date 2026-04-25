@@ -87,7 +87,7 @@ func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Name:               r.FormValue("name"),
 		Email:              r.FormValue("email"),
 		PasswordHash:       r.FormValue("password"),
-		TelegramID:         teleID,
+		TelegramID:         &teleID,
 		EmailParsingEnable: r.FormValue("email_parsing_enable") == "true",
 	}
 
@@ -229,5 +229,35 @@ func (h *authHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"message": "Logout sucess! Session cleared and token revoked.",
+	})
+}
+
+func (h *authHandler) GetBindingCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 1. Ambil userID dari context (asumsi middleware auth lu naruh ini di situ)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		http.Error(w, "Unauthorized: User ID not found", http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Panggil Usecase buat generate kode
+	code, err := h.usecase.RequestBindingCode(userID)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Gagal generate kode binding"})
+		return
+	}
+
+	// 3. Kirim Response JSON
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"binding_code": code,
+		"message":      "Kirim kode ini ke @NesavBot lewat perintah /bind [kode]",
 	})
 }

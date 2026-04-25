@@ -26,6 +26,10 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("POST "+prefix+"auth/refresh", aH.Refresh)
 	mux.HandleFunc("POST "+prefix+"auth/logout", authMW(aH.Logout))
 
+	// --- TELEGRAM BINDING ROUTE (TAMBAHAN) ---
+	// User harus login dulu buat dapet kode binding
+	mux.HandleFunc("GET "+prefix+"auth/telegram/binding-code", authMW(aH.GetBindingCode))
+
 	// --- GOOGLE OAUTH ROUTES ---
 	// User harus login apps dulu buat "Link Gmail"
 	mux.HandleFunc("GET "+prefix+"auth/google/login", authMW(aH.GoogleLogin))
@@ -39,8 +43,9 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("DELETE "+prefix+"workspaces", authMW(ownerMW(wH.DeleteWorkspace)))
 
 	// --- INVITATION ROUTES ---
-	mux.HandleFunc("POST "+prefix+"workspaces/invite", authMW(wH.Invite))
-	mux.HandleFunc("POST "+prefix+"workspaces/invitations/respond", authMW(wH.RespondInvitation))
+	mux.HandleFunc("POST "+prefix+"workspaces/{id}/invite", authMW(wH.Invite))
+	mux.HandleFunc("POST "+prefix+"workspaces/invitations/{id}/accept", authMW(wH.AcceptInvitation))
+	mux.HandleFunc("POST "+prefix+"workspaces/invitations/{id}/reject", authMW(wH.RejectInvitation))
 
 	// --- TRANSACTION ROUTES ---
 	mux.HandleFunc("POST "+prefix+"transactions/manual", authMW(tH.CreateManual))

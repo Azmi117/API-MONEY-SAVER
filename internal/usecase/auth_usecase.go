@@ -1,6 +1,8 @@
 package usecase
 
 import (
+	"errors"
+	"math/rand"
 	"os"
 	"time"
 
@@ -16,6 +18,9 @@ type AuthUsecase interface {
 	Login(email, password string) (string, string, error)
 	RefreshToken(tokenString string) (string, error)
 	Logout(accessToken string, refreshToken string) error
+	randomString(length int) string
+	RequestBindingCode(userID uint) (string, error)
+	VerifyAndBindTelegram(telegramID int64, code string) error
 }
 
 type authUsecase struct {
@@ -154,4 +159,59 @@ func (u *authUsecase) Logout(accessToken string, refreshToken string) error {
 	}
 
 	return u.repo.CreateRevokeToken(&revoked)
+}
+
+// randomString generates a random code for binding
+func (u *authUsecase) randomString(length int) string {
+	// Karakter yang jelas dibaca (nggak ada 0, O, 1, I, L)
+	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+	// Seed random biar kodenya gak itu-itu aja
+	// (Note: Di Go terbaru seed otomatis, tapi buat amannya pake time)
+	seed := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[seed.Intn(len(charset))]
+	}
+	return string(b)
+}
+
+func (u *authUsecase) RequestBindingCode(userID uint) (string, error) {
+	// 1. Generate Kode Unik (Bisa pake random string)
+	code := "NSV-" + u.randomString(6)
+
+	// 2. Set Expired (10 menit cukup lah ya)
+	expiry := time.Now().Add(10 * time.Minute)
+
+	// 3. Simpan ke Repo
+	err := u.repo.SetBindingCode(userID, code, expiry)
+	if err != nil {
+		return "", err
+	}
+
+	return code, nil
+}
+
+func (u *authUsecase) VerifyAndBindTelegram(telegramID int64, code string) error {
+	// 1. Cari user berdasarkan kode yang belum expired
+	user, err := u.repo.FindByBindingCode(code)
+	if err != nil {
+		return errors.New("kodenya salah atau udah angus, Mi! Generate baru di Web")
+	}
+
+	// 2. VALIDASI: Cek apakah Telegram ID ini udah dipake akun lain
+	// Kita nggak mau satu Telegram ID dipake buat login di 2 akun web berbeda
+	existingUser, _ := u.repo.GetByTelegramID(telegramID)
+	if existingUser != nil && existingUser.ID != user.ID {
+		return errors.New("akun Telegram lu udah terhubung ke akun Nesav lain!")
+	}
+
+	// 3. FINALISASI: Ikat TelegramID dan hapus kodenya (set NULL)
+	err = u.repo.FinalizeBinding(user.ID, telegramID)
+	if err != nil {
+		return errors.New("gagal nge-link akun, coba lagi nanti")
+	}
+
+	return nil
 }
