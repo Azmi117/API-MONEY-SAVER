@@ -10,11 +10,13 @@ import (
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/config"
 	delivery "github.com/Azmi117/API-MONEY-SAVER.git/internal/delivery/http"
+	tgDelivery "github.com/Azmi117/API-MONEY-SAVER.git/internal/delivery/telegram" // Import delivery telegram
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/repository"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/service"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/gemini"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/ocr"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5" // Library Telegram
 	"github.com/joho/godotenv"
 )
 
@@ -59,25 +61,37 @@ func main() {
 	tesseractClient := ocr.NewTesseractClient()
 	hybridScanner := ocr.NewHybridScanner(tesseractClient, geminiClient)
 
-	// SEKARANG INJECT: txRepo, authRepo, googleAuthService, & geminiClient
-	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner)
+	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo)
 	txHandler := delivery.NewTransactionHandler(txUsecase)
 
 	// ---------------------------------------------------------
-	// 4. THE ROBOT WORKER (Background Job)
+	// 4. TELEGRAM BOT LAYER (Muka Baru Mobile Replacement)
+	// ---------------------------------------------------------
+	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
+	bot, err := tgbotapi.NewBotAPI(botToken)
+	if err != nil {
+		log.Printf("⚠️ Gagal inisialisasi Telegram Bot: %v", err)
+	} else {
+		// Inisialisasi Handler Telegram
+		tgHandler := tgDelivery.NewTelegramHandler(bot, txUsecase, authUsecase, authRepo, wsUsecase, wsRepo)
+
+		// Jalankan Listener Telegram di Goroutine (Background)
+		go func() {
+			log.Printf("🤖 [Telegram Bot] Aktif sebagai @%s", bot.Self.UserName)
+			tgHandler.Listen()
+		}()
+	}
+
+	// ---------------------------------------------------------
+	// 5. THE ROBOT WORKER (Background Job Gmail)
 	// ---------------------------------------------------------
 	go func() {
-		// Kasih jeda 10 detik biar server utama beneran up dulu
 		time.Sleep(10 * time.Second)
-
-		// Set ticker (Untuk testing: 1 menit, Production: 15-30 menit)
 		ticker := time.NewTicker(1 * time.Minute)
 		fmt.Println("🚀 [Robot Sync] Worker Gmail Aktif! Siap ngecek email tiap 1 menit...")
 
 		for range ticker.C {
 			fmt.Println("🤖 [Robot Sync] Scan email mutasi sedang berjalan...")
-
-			// Jalankan fungsi sinkronisasi yang kita buat di usecase
 			ctxSync, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			errSync := txUsecase.SyncGmailTransactions(ctxSync)
 			if errSync != nil {
@@ -88,13 +102,13 @@ func main() {
 	}()
 
 	// ---------------------------------------------------------
-	// 5. SERVER CONFIG & ROUTES
+	// 6. SERVER CONFIG & ROUTES
 	// ---------------------------------------------------------
 	mux := http.NewServeMux()
 	delivery.MapRoutes(mux, authHandler, wsHandler, txHandler, authRepo, db)
 
 	port := ":8080"
-	log.Printf("Server running on port %s", port)
+	log.Printf("🌍 Server running on port %s", port)
 
 	if err := http.ListenAndServe(port, mux); err != nil {
 		log.Fatalf("Failed running server: %v", err)

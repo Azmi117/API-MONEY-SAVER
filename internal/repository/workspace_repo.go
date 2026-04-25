@@ -1,28 +1,30 @@
 package repository
 
 import (
+	"errors"
+
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"gorm.io/gorm"
 )
 
 type WorkspaceRepository interface {
-	// --- Workspace Core ---
 	Create(workspace *models.Workspace) error
 	FindByID(id uint) (*models.Workspace, error)
 	FindByOwnerID(ownerID uint) ([]models.Workspace, error)
 	FindAllByUserID(userID uint) ([]models.Workspace, error)
 	Update(workspace *models.Workspace) error
 	Delete(id uint) error
-
-	// --- Invitation Logic (PENGGANTI AddMember) ---
 	CreateInvitation(invitation *models.WorkspaceInvitation) error
 	FindInvitationByID(id uint) (*models.WorkspaceInvitation, error)
 	FindPendingInvitationsByUserID(userID uint) ([]models.WorkspaceInvitation, error)
 	UpdateInvitationStatus(invitation *models.WorkspaceInvitation) error
-	AcceptInvitation(invitation *models.WorkspaceInvitation) error // TRANSACTION: Invite + Member
-
-	// --- Stats ---
+	AcceptInvitation(invitation *models.WorkspaceInvitation) error
 	GetMembersCount(workspaceID uint) (int, error)
+	ConnectToTelegramGroup(workspaceID uint, chatID int64) error
+	GetByIDAndOwner(id uint, ownerID uint) (*models.Workspace, error)
+	GetWorkspacesByOwner(ownerID uint) ([]models.Workspace, error)
+	GetByTelegramChatID(chatID int64) (*models.Workspace, error)
+	IsMember(workspaceID uint, userID uint) (bool, error)
 }
 
 type workspaceRepository struct {
@@ -123,4 +125,51 @@ func (r *workspaceRepository) GetMembersCount(workspaceID uint) (int, error) {
 	var count int64
 	err := r.db.Model(&models.WorkspaceMember{}).Where("workspace_id = ?", workspaceID).Count(&count).Error
 	return int(count), err
+}
+
+func (r *workspaceRepository) ConnectToTelegramGroup(workspaceID uint, chatID int64) error {
+	return r.db.Model(&models.Workspace{}).Where("id = ?", workspaceID).Update("telegram_chat_id", chatID).Error
+}
+
+func (r *workspaceRepository) GetByIDAndOwner(id uint, ownerID uint) (*models.Workspace, error) {
+	var ws models.Workspace
+	err := r.db.Where("id = ? AND owner_id = ?", id, ownerID).First(&ws).Error
+	if err != nil {
+		return nil, err
+	}
+	return &ws, nil
+}
+
+func (r *workspaceRepository) GetWorkspacesByOwner(ownerID uint) ([]models.Workspace, error) {
+	var workspaces []models.Workspace
+	// Tarik semua workspace yang owner_id-nya cocok
+	err := r.db.Where("owner_id = ?", ownerID).Find(&workspaces).Error
+	return workspaces, err
+}
+
+func (r *workspaceRepository) GetByTelegramChatID(chatID int64) (*models.Workspace, error) {
+	var ws models.Workspace
+
+	// Kita cari workspace yang punya telegram_chat_id cocok
+	err := r.db.Where("telegram_chat_id = ?", chatID).First(&ws).Error
+
+	if err != nil {
+		// Jika grup ini belum pernah di-init (/init), balikin nil biar handler tau
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &ws, nil
+}
+
+func (r *workspaceRepository) IsMember(workspaceID uint, userID uint) (bool, error) {
+	var count int64
+	// Hapus pengecekan deleted_at karena kolomnya emang gak ada di tabel ini
+	err := r.db.Table("workspace_members").
+		Where("workspace_id = ? AND user_id = ?", workspaceID, userID).
+		Count(&count).Error
+
+	return count > 0, err
 }
