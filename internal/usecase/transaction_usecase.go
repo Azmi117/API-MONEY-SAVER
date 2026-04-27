@@ -30,6 +30,9 @@ type TransactionUsecase interface {
 	DeleteTransaction(transactionID uint) error
 	ProcessScanHybrid2(ctx context.Context, userID uint, workspaceID uint, imgData []byte, mimeType string) (*dto.ProcessScanHybridResult, error)
 	HardDeleteTransaction(id uint) error
+	ApproveEmailLog(ctx context.Context, logID uint, userID uint) error
+	RejectEmailLog(ctx context.Context, logID uint, userID uint) error
+	GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error)
 }
 
 type transactionUsecase struct {
@@ -155,31 +158,43 @@ func (u *transactionUsecase) ProcessScan(ctx context.Context, userID uint, works
 func (u *transactionUsecase) SyncGmailTransactions(ctx context.Context) error {
 	users, err := u.authRepo.FindAllWithGmail()
 	if err != nil {
+		log.Printf("❌ [Robot Sync] Gagal tarik user: %v", err)
 		return apperror.Internal("Failed to retrieve users with Gmail integration!")
 	}
+
+	log.Printf("🔍 [Robot Sync] Menemukan %d user dengan integrasi Gmail", len(users))
 
 	for _, user := range users {
 		srv, err := u.googleService.GetGmailService(user.GoogleRefreshToken)
 		if err != nil {
+			log.Printf("❌ [Robot Sync] Gagal dapet Gmail Service buat user %d: %v", user.ID, err)
 			continue
 		}
 
-		query := fmt.Sprintf("(from:no-reply@bankmandiri.co.id OR from:noreply.livin@bankmandiri.co.id) after:%s",
-			time.Now().AddDate(0, 0, -1).Format("2006/01/02"))
+		// --- TEST: Lebarin query dulu biar yakin email ketangkep ---
+		query := "(from:no-reply@bankmandiri.co.id OR from:noreply.livin@bankmandiri.co.id)"
 
 		res, err := srv.Users.Messages.List("me").Q(query).Do()
-		if err != nil || len(res.Messages) == 0 {
+		if err != nil {
+			log.Printf("❌ [Robot Sync] Gagal List Messages: %v", err)
 			continue
 		}
 
+		log.Printf("📩 [Robot Sync] Scan Berhasil! Menemukan %d email potensial untuk user %s", len(res.Messages), user.Email)
+
 		for _, m := range res.Messages {
-			existing, _ := u.repo.GetByGmailID(m.Id)
-			if existing != nil && existing.ID != 0 {
+			// Cek apakah sudah pernah diproses
+			existingLog, _ := u.repo.GetEmailLogByGmailID(m.Id)
+			if existingLog != nil {
+				// Jangan log ini setiap menit biar terminal gak penuh, cukup skip aja
 				continue
 			}
 
+			log.Printf("✨ [Robot Sync] Memproses email baru ID: %s", m.Id)
+
 			fullMsg, err := srv.Users.Messages.Get("me", m.Id).Do()
 			if err != nil {
+				log.Printf("❌ [Robot Sync] Gagal ambil detail email %s: %v", m.Id, err)
 				continue
 			}
 
@@ -192,22 +207,32 @@ func (u *transactionUsecase) SyncGmailTransactions(ctx context.Context) error {
 
 			bodyStr := u.getBody(fullMsg.Payload)
 			parsed := utils.ParseMandiriEmail(subject, bodyStr)
-			if parsed != nil {
-				tx := &models.Transaction{
-					UserID:      user.ID,
-					WorkspaceID: 1,
-					Amount:      parsed.Amount,
-					Merchant:    parsed.Merchant,
-					Method:      parsed.Method,
-					Note:        parsed.Note,
-					Date:        parsed.Date,
-					Type:        "expense",
-					Source:      "email_auto",
-					Status:      "pending",
-					GmailID:     m.Id,
-				}
 
-				_ = u.repo.Create(tx)
+			// --- POINT PENTING: GmailID WAJIB DIISI ---
+			emailLog := &models.EmailParsed{
+				UserID:     user.ID,
+				RawEmail:   bodyStr,
+				BankSource: "Mandiri",
+				Status:     "Pending",
+				GmailID:    m.Id, // <--- INI JANGAN SAMPE KETINGGALAN LAGI MI!
+			}
+
+			if parsed != nil {
+				emailLog.Amount = parsed.Amount
+				emailLog.Merchant = parsed.Merchant
+				emailLog.ParsedDate = parsed.Date
+				emailLog.Method = parsed.Method
+				emailLog.Note = parsed.Note
+				emailLog.Type = "expense"
+			} else {
+				log.Printf("⚠️ [Robot Sync] Email %s ketemu tapi gagal diparse Regex", m.Id)
+			}
+
+			err = u.repo.CreateEmailLog(emailLog)
+			if err != nil {
+				log.Printf("❌ [Robot Sync] Gagal simpan ke DB: %v", err)
+			} else {
+				log.Printf("✅ [Robot Sync] Email berhasil dicatat: %s", m.Id)
 			}
 		}
 	}
@@ -389,6 +414,63 @@ func (u *transactionUsecase) checkAndResetQuota(user *models.User) error {
 	return nil
 }
 
+func (u *transactionUsecase) ApproveEmailLog(ctx context.Context, logID uint, userID uint) error {
+	// 1. Ambil data log mentah
+	logData, err := u.repo.GetEmailLogByID(logID)
+	if err != nil {
+		return apperror.NotFound("Data email log tidak ditemukan!")
+	}
+
+	// 2. Keamanan: Pastiin ini log punya user yang login
+	if logData.UserID != userID {
+		return apperror.Forbidden("Lu nggak berhak akses log ini!")
+	}
+
+	// 3. Cek status (pastiin masih pending)
+	if logData.Status != "Pending" {
+		return apperror.BadRequest("Email log ini sudah diproses!")
+	}
+
+	// 4. MAPPING DETAIL (Gak perlu logic if-else manual lagi!)
+	// Langsung ambil dari logData yang sudah di-parse oleh parser_mandiri saat email masuk
+	tx := &models.Transaction{
+		UserID:      logData.UserID,
+		WorkspaceID: 1, // Lu bisa buat dinamis nanti kalau udah main multi-workspace
+		Amount:      logData.Amount,
+		Merchant:    logData.Merchant,
+		Date:        logData.ParsedDate,
+		Source:      "email_auto",
+		Status:      "approved",
+		Method:      logData.Method, // Ambil dari hasil parsing awal
+		Note:        logData.Note,   // Ambil dari hasil parsing awal (biar "Test QR" masuk sini)
+		Type:        "expense",
+		GmailID:     logData.GmailID,
+	}
+
+	// 5. Eksekusi simpan ke transaksi
+	if err := u.repo.Create(tx); err != nil {
+		return apperror.Internal("Gagal membuat transaksi dari email: " + err.Error())
+	}
+
+	// 6. Update status log jadi Success dan hubungkan TransactionID-nya
+	// Pastiin repo UpdateEmailLogStatus lu juga bisa update TransactionID biar sinkron
+	return u.repo.UpdateEmailLogStatus(logID, "Success")
+}
+
+func (u *transactionUsecase) RejectEmailLog(ctx context.Context, logID uint, userID uint) error {
+	log, err := u.repo.GetEmailLogByID(logID)
+	if err != nil {
+		return apperror.NotFound("Data email log tidak ditemukan!")
+	}
+
+	if log.UserID != userID {
+		return apperror.Forbidden("Akses ditolak!")
+	}
+
+	// Cukup update status jadi Rejected, nggak perlu masukin ke tabel transactions
+	return u.repo.UpdateEmailLogStatus(logID, "Rejected")
+}
+
 func (u *transactionUsecase) ConfirmTransaction(ctx context.Context, transactionID uint) error {
 	err := u.repo.UpdateStatus(transactionID, "approved")
 	if err != nil {
@@ -415,4 +497,8 @@ func (u *transactionUsecase) DeleteTransaction(transactionID uint) error {
 
 func (u *transactionUsecase) HardDeleteTransaction(id uint) error {
 	return u.repo.HardDelete(id)
+}
+
+func (u *transactionUsecase) GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error) {
+	return u.repo.GetPendingEmailLogs(userID)
 }

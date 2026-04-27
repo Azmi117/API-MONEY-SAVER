@@ -16,6 +16,11 @@ type TransactionRepository interface {
 	Delete(id uint) error
 	GetByGmailID(gmailID string) (*models.Transaction, error)
 	HardDelete(id uint) error
+	CreateEmailLog(emailLog *models.EmailParsed) error
+	GetEmailLogByGmailID(gmailID string) (*models.EmailParsed, error)
+	UpdateEmailLogStatus(id uint, status string) error
+	GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error)
+	GetEmailLogByID(id uint) (*models.EmailParsed, error)
 }
 
 type transactionRepository struct {
@@ -80,4 +85,36 @@ func (r *transactionRepository) GetByGmailID(gmailID string) (*models.Transactio
 func (r *transactionRepository) HardDelete(id uint) error {
 	// Unscoped() bikin perintah SQL jadi: DELETE FROM transactions WHERE id = ?
 	return r.db.Unscoped().Delete(&models.Transaction{}, id).Error
+}
+
+func (r *transactionRepository) CreateEmailLog(emailLog *models.EmailParsed) error {
+	return r.db.Create(emailLog).Error
+}
+
+func (r *transactionRepository) GetEmailLogByGmailID(gmailID string) (*models.EmailParsed, error) {
+	var log models.EmailParsed
+	err := r.db.Where("gmail_id = ?", gmailID).First(&log).Error
+	if err != nil {
+		return nil, err
+	}
+	return &log, nil
+}
+
+func (r *transactionRepository) GetEmailLogByID(id uint) (*models.EmailParsed, error) {
+	var log models.EmailParsed
+	err := r.db.First(&log, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &log, nil
+}
+
+func (r *transactionRepository) UpdateEmailLogStatus(id uint, status string) error {
+	return r.db.Model(&models.EmailParsed{}).Where("id = ?", id).Update("status", status).Error
+}
+
+func (r *transactionRepository) GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error) {
+	var logs []models.EmailParsed
+	err := r.db.Where("user_id = ? AND status = ?", userID, "Pending").Find(&logs).Error
+	return logs, err
 }

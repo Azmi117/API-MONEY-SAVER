@@ -24,36 +24,30 @@ func ParseMandiriEmail(subject string, body string) *ParsedTransaction {
 	bodyLower := strings.ToLower(body)
 	subjectLower := strings.ToLower(subject)
 
-	// 1. Deteksi Metode & Amount (Pake Parameter Sakti Lo)
+	// 1. Deteksi Metode (QRIS harus paling atas karena subject-nya sering cuma "Transfer")
 	if strings.Contains(bodyLower, "dengan qr") {
 		method = "QRIS"
 		amount = extractAmount(body, "Nominal")
 	} else if strings.Contains(bodyLower, "biaya transfer") {
 		method = "Transfer Bank Lain"
-		amount = extractAmount(body, "Total Transaksi") // Sesuai saran lo, ambil TOTAL (biar saldo sinkron)
-	} else if strings.Contains(bodyLower, "jumlah transfer") {
+		amount = extractAmount(body, "Total Transaksi")
+	} else if strings.Contains(bodyLower, "jumlah transfer") || strings.Contains(subjectLower, "transfer") {
 		method = "Transfer"
 		amount = extractAmount(body, "Jumlah Transfer")
 	} else if strings.Contains(subjectLower, "top-up") {
 		method = "Top-up"
 		amount = extractAmount(body, "Nominal Top-up")
 	} else {
-		// Fallback jika tidak ada yang cocok
 		method = "Transfer"
 		amount = extractAmount(body, "(?:Nominal|Total|Jumlah)")
 	}
 
-	// 2. Deteksi Merchant (Penerima/Penyedia Jasa)
+	// 2. Deteksi Merchant & Note (Pake Body Mentah biar Regex-nya akurat lewat Tag HTML)
 	if method == "Top-up" {
 		merchant = "Mandiri E-money"
-	} else {
-		merchant = extractMerchant(body)
-	}
-
-	// 3. Deteksi Note (Pesan/Keterangan)
-	if method == "Top-up" {
 		note = "Top-up via NFC/Livin"
 	} else {
+		merchant = extractMerchant(body)
 		note = extractNote(body)
 	}
 
@@ -104,12 +98,10 @@ func extractAmount(body string, keyword string) float64 {
 }
 
 func extractMerchant(body string) string {
-	cleanBody := stripHTML(body)
-
-	// Regex ini ambil teks SETELAH 'Penerima', tapi BERHENTI kalau ketemu 2 spasi atau lebih
-	// karena di email Mandiri antar label biasanya dipisah spasi banyak
-	re := regexp.MustCompile(`(?i)(?:Penerima|Penyedia Jasa)\s*[:\s]+(.*?)(?:\s{2,}|$)`)
-	match := re.FindStringSubmatch(cleanBody)
+	// Regex ini nyari teks di dalam tag <h4> atau <td> yang ada setelah kata Penerima/Penyedia Jasa
+	// Lebih aman daripada stripHTML dulu
+	re := regexp.MustCompile(`(?i)(?:Penerima|Penyedia Jasa).*?<(?:h4|td)[^>]*>\s*(.*?)\s*</(?:h4|td)>`)
+	match := re.FindStringSubmatch(body)
 
 	if len(match) > 1 {
 		return strings.TrimSpace(match[1])
@@ -118,16 +110,14 @@ func extractMerchant(body string) string {
 }
 
 func extractNote(body string) string {
-	cleanBody := stripHTML(body)
-
-	// Sama kayak merchant, ambil teks SETELAH 'Keterangan', berhenti kalau ketemu spasi double
-	re := regexp.MustCompile(`(?i)Keterangan\s*[:\s]+(.*?)(?:\s{2,}|$)`)
-	match := re.FindStringSubmatch(cleanBody)
+	// Cari label "Keterangan", lalu ambil isi <td> di sampingnya
+	re := regexp.MustCompile(`(?i)Keterangan.*?<td[^>]*>\s*(.*?)\s*</td>`)
+	match := re.FindStringSubmatch(body)
 
 	if len(match) > 1 {
-		note := strings.TrimSpace(match[1])
-		if note != "" && note != "-" {
-			return note
+		res := strings.TrimSpace(match[1])
+		if res != "" && res != "-" {
+			return res
 		}
 	}
 	return "-"

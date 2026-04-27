@@ -296,3 +296,50 @@ func (h *TransactionHandler) ScanReceiptHybrid(w http.ResponseWriter, r *http.Re
 		},
 	})
 }
+
+// 1. GET PENDING EMAILS
+func (h *TransactionHandler) GetPendingEmails(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("user_id").(uint)
+
+	// Ambil list dari usecase (nanti kita tambahin methodnya di usecase)
+	logs, err := h.usecase.GetPendingEmailLogs(userID)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(logs)
+}
+
+// 2. APPROVE EMAIL LOG
+func (h *TransactionHandler) ApproveEmail(w http.ResponseWriter, r *http.Request) {
+	logIDStr := r.PathValue("id")
+	logID, _ := strconv.ParseUint(logIDStr, 10, 32)
+	userID := r.Context().Value("user_id").(uint)
+
+	err := h.usecase.ApproveEmailLog(r.Context(), uint(logID), userID)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Email approved and transaction created!"})
+}
+
+// 3. REJECT EMAIL LOG
+func (h *TransactionHandler) RejectEmail(w http.ResponseWriter, r *http.Request) {
+	logIDStr := r.PathValue("id")
+	logID, _ := strconv.ParseUint(logIDStr, 10, 32)
+	userID := r.Context().Value("user_id").(uint)
+
+	err := h.usecase.RejectEmailLog(r.Context(), uint(logID), userID)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Email log rejected successfully"})
+}
