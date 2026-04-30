@@ -28,6 +28,9 @@ func main() {
 
 	db := config.ConnectDB()
 
+	ocrKey := os.Getenv("OCR_SPACE_API_KEY")
+	ocrClient := ocr.NewOCRSpaceClient(ocrKey)
+
 	// ---------------------------------------------------------
 	// 0. PKG LAYER (External Clients)
 	// ---------------------------------------------------------
@@ -61,7 +64,7 @@ func main() {
 	tesseractClient := ocr.NewTesseractClient()
 	hybridScanner := ocr.NewHybridScanner(tesseractClient, geminiClient)
 
-	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo)
+	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient)
 	txHandler := delivery.NewTransactionHandler(txUsecase)
 
 	// ---------------------------------------------------------

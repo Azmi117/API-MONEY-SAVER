@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -342,4 +343,69 @@ func (h *TransactionHandler) RejectEmail(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Email log rejected successfully"})
+}
+
+func (h *TransactionHandler) ScanAlternative(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("📩 [Handler] Masuk ke ScanAlternative")
+
+	// 1. Ambil user_id (Sesuai middleware lo: key "user_id", tipe uint)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		fmt.Println("❌ [Handler] User ID not found in context or wrong type")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Parse Multipart Form
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		fmt.Println("❌ [Handler] Parse Form Error:", err)
+		http.Error(w, "File too large", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Ambil file & workspace_id
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		fmt.Println("❌ [Handler] FormFile Error:", err)
+		http.Error(w, "File is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	workspaceIDStr := r.FormValue("workspace_id")
+	wID, err := strconv.ParseUint(workspaceIDStr, 10, 32)
+	if err != nil {
+		fmt.Println("❌ [Handler] Invalid Workspace ID:", workspaceIDStr)
+		http.Error(w, "Invalid workspace_id", http.StatusBadRequest)
+		return
+	}
+
+	// 4. Simpan file sementara
+	// Pake userID (uint) langsung buat nama file
+	filePath := fmt.Sprintf("uploads/%d_%s", userID, header.Filename)
+	dst, err := os.Create(filePath)
+	if err != nil {
+		fmt.Println("❌ [Handler] Create File Error:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+	io.Copy(dst, file)
+	defer os.Remove(filePath) // Hapus setelah kelar proses
+
+	fmt.Println("📡 [Handler] Calling Usecase Alternative...")
+
+	// 5. Eksekusi Usecase
+	result, err := h.usecase.ProcessScanAlternative(r.Context(), filePath, userID, uint(wID))
+	if err != nil {
+		fmt.Println("❌ [Handler] Usecase Error:", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	fmt.Println("✅ [Handler] Scan Success!")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }

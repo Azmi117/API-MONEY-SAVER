@@ -164,3 +164,42 @@ func formatJSON(raw string) string {
 	res = strings.ReplaceAll(res, "```", "")
 	return strings.TrimSpace(res)
 }
+
+// AnalyzeOCRText fungsinya buat nerima hasil text mentah (kayak dari OCR.space)
+// terus dirapiin jadi format ResultScan yang lengkap.
+func (g *GeminiClient) AnalyzeOCRText(ctx context.Context, rawText string) (*ResultScan, error) {
+	prompt := fmt.Sprintf(`
+		Tolong rapihin teks hasil OCR struk belanja berikut ini. 
+		Berikan jawaban HANYA dalam format JSON:
+		{
+			"amount": float, "merchant": string, "date": "YYYY-MM-DD HH:mm:ss", 
+			"type": "expense", "method": "string", "note": "string",
+			"items": [{"description": string, "quantity": int, "unit_price": float, "total": float}],
+			"total": float
+		}
+		TEKS OCR: """%s"""`, rawText)
+
+	resp, err := g.model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+		return nil, fmt.Errorf("AI empty response")
+	}
+
+	var result ResultScan
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if txt, ok := part.(genai.Text); ok {
+			cleanJSON := formatJSON(string(txt))
+			if err := json.Unmarshal([]byte(cleanJSON), &result); err != nil {
+				return nil, err
+			}
+			if result.Amount == 0 && result.Total != 0 {
+				result.Amount = result.Total
+			}
+			return &result, nil
+		}
+	}
+	return nil, fmt.Errorf("no text found")
+}
