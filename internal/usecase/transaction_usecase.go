@@ -36,6 +36,7 @@ type TransactionUsecase interface {
 	RejectEmailLog(ctx context.Context, logID uint, userID uint) error
 	GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error)
 	ProcessScanAlternative(ctx context.Context, imagePath string, userID uint, workspaceID uint) (*dto.ProcessScanHybridResult, error)
+	ConfirmScanTransaction(ctx context.Context, txData models.Transaction, items []models.TransactionItem) error
 }
 
 type transactionUsecase struct {
@@ -509,16 +510,33 @@ func (u *transactionUsecase) GetPendingEmailLogs(userID uint) ([]models.EmailPar
 }
 
 func (u *transactionUsecase) ProcessScanAlternative(ctx context.Context, imagePath string, userID uint, workspaceID uint) (*dto.ProcessScanHybridResult, error) {
-	// 1. Ambil teks mentah dari OCR.space (Engine 2)
+	// 1. Ambil data user buat cek limit (Sesuai sistem OCRUsageCount lu)
+	user, err := u.authRepo.FindByID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Cek Limit berdasarkan Tier (Logic yang lu pake di hybrid2)
+	limit := 2 // Default Free
+	if user.AccountTier == "pro" {
+		limit = 10
+	} else if user.AccountTier == "ultimate" {
+		limit = 100
+	}
+
+	if user.OCRUsageCount >= limit {
+		return nil, apperror.Forbidden("Weekly scan limit reached for your tier")
+	}
+
+	// 3. Ekstrak Teks via OCR Space
 	rawText, err := u.ocrSpaceClient.ExtractRawText(imagePath)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Panggil Manual Parser (Murni Logic Go)
+	// 4. Parse secara manual (The Beast Version)
 	merchant, amount, transactionDate, items := u.manualParserV3(rawText)
 
-	// 3. Mapping ke Model dengan status PENDING
 	transaction := &models.Transaction{
 		UserID:           userID,
 		WorkspaceID:      workspaceID,
@@ -533,17 +551,29 @@ func (u *transactionUsecase) ProcessScanAlternative(ctx context.Context, imagePa
 		TransactionItems: items,
 	}
 
-	// 4. Save ke Database
-	if err := u.repo.Create(transaction); err != nil {
-		return nil, fmt.Errorf("failed to save pending scan: %w", err)
+	// 5. Increment Usage (Pake repo yang udah ada)
+	// Asumsi lu punya method ini buat nambahin OCRUsageCount di DB
+	err = u.authRepo.IncrementOCRUsage(userID)
+	if err != nil {
+		return nil, err
 	}
 
+	// 6. RETURN DTO (Draft Mode - No DB Create)
 	return &dto.ProcessScanHybridResult{
 		Transaction:  transaction,
 		Engine:       "OCR_SPACE_PURE",
 		Confidence:   0,
 		FallbackUsed: false,
 	}, nil
+}
+
+func (u *transactionUsecase) ConfirmScanTransaction(ctx context.Context, txData models.Transaction, items []models.TransactionItem) error {
+	// 1. Set relasi items ke header transaction
+	txData.TransactionItems = items
+
+	// 2. Simpan ke Database (Sekali jalan karena sudah ada relasi di struct)
+	// Ini bakal nge-save ke tabel transactions DAN transaction_items otomatis via GORM
+	return u.repo.Create(&txData)
 }
 
 // Helper Parser tanpa Gemini

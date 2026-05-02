@@ -55,6 +55,7 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("PATCH "+prefix+"transactions/confirm", authMW(tH.Confirm))
 	mux.HandleFunc("POST "+prefix+"transactions/scan-hybrid2", authMW(tH.ScanReceiptHybrid))
 	mux.HandleFunc("POST "+prefix+"transactions/scan-alt", authMW(tH.ScanAlternative))
+	mux.HandleFunc("POST "+prefix+"transactions/scan-alt/confirm", authMW(tH.ConfirmScan))
 	mux.HandleFunc("GET "+prefix+"emails/pending", authMW(tH.GetPendingEmails))
 	mux.HandleFunc("POST "+prefix+"emails/{id}/approve", authMW(tH.ApproveEmail))
 	mux.HandleFunc("POST "+prefix+"emails/{id}/reject", authMW(tH.RejectEmail))

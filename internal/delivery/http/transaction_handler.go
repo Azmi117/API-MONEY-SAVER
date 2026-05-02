@@ -12,8 +12,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/dto"
+	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
 	"github.com/jaytaylor/html2text"
@@ -408,4 +410,59 @@ func (h *TransactionHandler) ScanAlternative(w http.ResponseWriter, r *http.Requ
 	fmt.Println("✅ [Handler] Scan Success!")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req dto.ConfirmTransactionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Ambil userID dari context (asumsi lu set di middleware auth lu)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse tanggal dari string YYYY-MM-DD
+	parsedDate, err := time.Parse("2006-01-02", req.Date)
+	if err != nil {
+		http.Error(w, "Invalid date format, use YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+
+	// Mapping ke model Transaction
+	transaction := models.Transaction{
+		UserID:           userID,
+		WorkspaceID:      req.WorkspaceID,
+		Merchant:         req.Merchant,
+		Amount:           req.Amount,
+		Date:             parsedDate,
+		Type:             req.Type,
+		CategoryID:       req.CategoryID,
+		Note:             req.Note,
+		Status:           "approved", // Review selesai
+		Source:           "ocr_space_pure",
+		TransactionItems: req.Items, // Pasangkan list items
+	}
+
+	// Panggil usecase ConfirmScanTransaction yang udah lu buat tadi
+	err = h.usecase.ConfirmScanTransaction(r.Context(), transaction, req.Items)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Transaction confirmed and saved successfully",
+	})
 }
