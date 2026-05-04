@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -35,13 +36,15 @@ type TransactionUsecase interface {
 	ApproveEmailLog(ctx context.Context, logID uint, userID uint) error
 	RejectEmailLog(ctx context.Context, logID uint, userID uint) error
 	GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error)
-	ProcessScanAlternative(ctx context.Context, imagePath string, userID uint, workspaceID uint) (*dto.ProcessScanHybridResult, error)
+	ProcessScanAlternative(ctx context.Context, imagePath string, userID uint, workspaceID uint) (*dto.ProcessScanHybridResult, uint, error)
 	ConfirmScanTransaction(ctx context.Context, txData models.Transaction, items []models.TransactionItem) error
+	ConfirmPendingTransaction(ctx context.Context, pendingID uint) error
 }
 
 type transactionUsecase struct {
 	repo           repository.TransactionRepository
 	authRepo       repository.AuthRepository
+	pendingRepo    repository.PendingTransactionRepository
 	googleService  service.GoogleAuthService
 	geminiClient   *gemini.GeminiClient
 	hybridScanner  *ocr.HybridScanner
@@ -49,7 +52,7 @@ type transactionUsecase struct {
 	ocrSpaceClient *ocr.OCRSpaceClient
 }
 
-func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient) TransactionUsecase {
+func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient, pendingRepo repository.PendingTransactionRepository) TransactionUsecase {
 	return &transactionUsecase{
 		repo:           repo,
 		authRepo:       authRepo,
@@ -58,6 +61,7 @@ func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repos
 		hybridScanner:  hybridScanner,
 		wsRepo:         wsRepo,
 		ocrSpaceClient: ocrSpace,
+		pendingRepo:    pendingRepo,
 	}
 }
 
@@ -509,11 +513,11 @@ func (u *transactionUsecase) GetPendingEmailLogs(userID uint) ([]models.EmailPar
 	return u.repo.GetPendingEmailLogs(userID)
 }
 
-func (u *transactionUsecase) ProcessScanAlternative(ctx context.Context, imagePath string, userID uint, workspaceID uint) (*dto.ProcessScanHybridResult, error) {
+func (u *transactionUsecase) ProcessScanAlternative(ctx context.Context, imagePath string, userID uint, workspaceID uint) (*dto.ProcessScanHybridResult, uint, error) {
 	// 1. Ambil data user buat cek limit (Sesuai sistem OCRUsageCount lu)
 	user, err := u.authRepo.FindByID(userID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// 2. Cek Limit berdasarkan Tier (Logic yang lu pake di hybrid2)
@@ -525,13 +529,13 @@ func (u *transactionUsecase) ProcessScanAlternative(ctx context.Context, imagePa
 	}
 
 	if user.OCRUsageCount >= limit {
-		return nil, apperror.Forbidden("Weekly scan limit reached for your tier")
+		return nil, 0, apperror.Forbidden("Weekly scan limit reached for your tier")
 	}
 
 	// 3. Ekstrak Teks via OCR Space
 	rawText, err := u.ocrSpaceClient.ExtractRawText(imagePath)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// 4. Parse secara manual (The Beast Version)
@@ -551,20 +555,27 @@ func (u *transactionUsecase) ProcessScanAlternative(ctx context.Context, imagePa
 		TransactionItems: items,
 	}
 
-	// 5. Increment Usage (Pake repo yang udah ada)
-	// Asumsi lu punya method ini buat nambahin OCRUsageCount di DB
-	err = u.authRepo.IncrementOCRUsage(userID)
-	if err != nil {
-		return nil, err
+	// Simpan ke tabel PendingTransaction
+	jsonData, _ := json.Marshal(transaction)
+	pending := &models.PendingTransaction{
+		UserID:      userID,
+		WorkspaceID: workspaceID,
+		Source:      "telegram_alt",
+		RawData:     string(jsonData),
+		Status:      "pending",
 	}
 
-	// 6. RETURN DTO (Draft Mode - No DB Create)
+	err = u.pendingRepo.Create(pending)
+	if err != nil {
+		return nil, 0, err // Sekarang ini sudah benar karena signature fungsinya minta 3 return
+	}
+
+	_ = u.authRepo.IncrementOCRUsage(userID)
+
 	return &dto.ProcessScanHybridResult{
-		Transaction:  transaction,
-		Engine:       "OCR_SPACE_PURE",
-		Confidence:   0,
-		FallbackUsed: false,
-	}, nil
+		Transaction: transaction,
+		Engine:      "OCR_SPACE_PURE",
+	}, pending.ID, nil
 }
 
 func (u *transactionUsecase) ConfirmScanTransaction(ctx context.Context, txData models.Transaction, items []models.TransactionItem) error {
@@ -574,6 +585,34 @@ func (u *transactionUsecase) ConfirmScanTransaction(ctx context.Context, txData 
 	// 2. Simpan ke Database (Sekali jalan karena sudah ada relasi di struct)
 	// Ini bakal nge-save ke tabel transactions DAN transaction_items otomatis via GORM
 	return u.repo.Create(&txData)
+}
+
+func (u *transactionUsecase) ConfirmPendingTransaction(ctx context.Context, pendingID uint) error {
+	// 1. Ambil data dari tabel penampung
+	pending, err := u.pendingRepo.FindByID(pendingID)
+	if err != nil {
+		return err
+	}
+
+	// 2. Decode JSON mentah
+	var txData models.Transaction
+	if err := json.Unmarshal([]byte(pending.RawData), &txData); err != nil {
+		return err
+	}
+
+	// --- PERBAIKAN DI SINI ---
+	// Set status transaksi jadi approved sebelum disimpan ke tabel utama
+	txData.Status = "approved"
+	// -------------------------
+
+	// 3. Simpan ke tabel transactions permanen
+	err = u.ConfirmScanTransaction(ctx, txData, txData.TransactionItems)
+	if err != nil {
+		return err
+	}
+
+	// 4. Update status di tabel pending agar sinkron
+	return u.pendingRepo.UpdateStatus(pendingID, "approved")
 }
 
 // Helper Parser tanpa Gemini

@@ -21,11 +21,12 @@ type TelegramHandler struct {
 	txUsecase   usecase.TransactionUsecase
 	authUsecase usecase.AuthUsecase // Ditambahkan untuk handle binding
 	authRepo    repository.AuthRepository
+	pendingRepo repository.PendingTransactionRepository
 	wsUsecase   usecase.WorkspaceUsecase
 	wsRepo      repository.WorkspaceRepository
 }
 
-func NewTelegramHandler(bot *tgbotapi.BotAPI, txUsecase usecase.TransactionUsecase, authUsecase usecase.AuthUsecase, authRepo repository.AuthRepository, wsUsecase usecase.WorkspaceUsecase, wsRepo repository.WorkspaceRepository) *TelegramHandler {
+func NewTelegramHandler(bot *tgbotapi.BotAPI, txUsecase usecase.TransactionUsecase, authUsecase usecase.AuthUsecase, authRepo repository.AuthRepository, wsUsecase usecase.WorkspaceUsecase, wsRepo repository.WorkspaceRepository, pendingRepo repository.PendingTransactionRepository) *TelegramHandler {
 	return &TelegramHandler{
 		bot:         bot,
 		txUsecase:   txUsecase,
@@ -33,6 +34,7 @@ func NewTelegramHandler(bot *tgbotapi.BotAPI, txUsecase usecase.TransactionUseca
 		authRepo:    authRepo,
 		wsUsecase:   wsUsecase,
 		wsRepo:      wsRepo,
+		pendingRepo: pendingRepo,
 	}
 }
 
@@ -133,111 +135,175 @@ func (h *TelegramHandler) handleCallback(query *tgbotapi.CallbackQuery) {
 	chatID := query.Message.Chat.ID
 	messageID := query.Message.MessageID
 
-	h.bot.Request(tgbotapi.NewCallback(query.ID, ""))
-
-	var finalStatus string
-	if strings.HasPrefix(data, "save_") {
-		idStr := strings.TrimPrefix(data, "save_")
-		id, _ := strconv.Atoi(idStr)
-
-		err := h.txUsecase.ConfirmTransaction(context.Background(), uint(id))
-		if err != nil {
-			finalStatus = "❌ Gagal mengonfirmasi transaksi."
-		} else {
-			finalStatus = "✅ **Berhasil Disimpan!** Transaksi sudah masuk ke pembukuan."
-		}
-	} else if strings.HasPrefix(data, "delete_") {
-		idStr := strings.TrimPrefix(data, "delete_")
-		id, _ := strconv.Atoi(idStr)
-
-		err := h.txUsecase.HardDeleteTransaction(uint(id))
-		if err != nil {
-			finalStatus = "❌ Gagal menghapus data dari sistem."
-		} else {
-			finalStatus = "🗑️ **Transaksi Dibatalkan.** Data sampah tadi udah gua hapus permanen, cuy."
-		}
-	}
-
-	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, finalStatus)
-	editMsg.ParseMode = "Markdown"
-	h.bot.Send(editMsg)
-}
-
-func (h *TelegramHandler) handlePhoto(message *tgbotapi.Message) {
-	user, err := h.authRepo.GetByTelegramID(int64(message.From.ID))
+	// STEP 1: Identifikasi User dari DB
+	user, err := h.authRepo.GetByTelegramID(query.From.ID)
 	if err != nil {
-		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "Akun belum terhubung! Silahkan binding lewat Web."))
+		h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Akun belum terhubung, Mi!"))
 		return
 	}
 
-	var workspaceID uint
-	if !message.Chat.IsPrivate() {
-		// Jika di GRUP, cari workspace yang terhubung ke Chat ID ini
-		ws, err := h.wsRepo.GetByTelegramChatID(message.Chat.ID)
-		if err != nil {
-			h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "Grup ini belum di-init! Owner harus ketik /init [ID] dulu."))
-			return
-		}
-		workspaceID = ws.ID
-	} else {
-		// Jika PRIVATE, pakai workspace default (milik sendiri)
-		if len(user.OwnedWorkspaces) > 0 {
-			workspaceID = user.OwnedWorkspaces[0].ID
+	// STEP 2: Feedback ke Telegram biar loading di tombol ilang
+	h.bot.Request(tgbotapi.NewCallback(query.ID, ""))
+
+	// STEP 3: Handle Pilihan Engine (Hybrid vs Alternatif)
+	if strings.HasPrefix(data, "select_alt:") || strings.HasPrefix(data, "select_hybrid:") {
+		var fileName string
+		isHybrid := strings.HasPrefix(data, "select_hybrid:")
+
+		// Ambil nama file dari callback data
+		if isHybrid {
+			fileName = strings.TrimPrefix(data, "select_hybrid:")
 		} else {
-			h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "Lu belum punya Workspace! Bikin dulu di Web, Mi."))
+			fileName = strings.TrimPrefix(data, "select_alt:")
+		}
+
+		localPath := "uploads/" + fileName
+
+		// STEP 4: Cek keberadaan file (Solusi Anti-Restart)
+		// Jika server restart dan file masih ada di folder uploads, proses lanjut.
+		if _, err := os.Stat(localPath); os.IsNotExist(err) {
+			h.bot.Send(tgbotapi.NewMessage(chatID, "❌ File struk ilang atau sesi basi. Upload lagi ya."))
 			return
 		}
+
+		// STEP 5: Tentukan Workspace (Group chat vs Private chat)
+		var workspaceID uint
+		ws, err := h.wsRepo.GetByTelegramChatID(chatID)
+		if err == nil && ws != nil {
+			workspaceID = ws.ID
+		} else if len(user.OwnedWorkspaces) > 0 {
+			workspaceID = user.OwnedWorkspaces[0].ID
+		}
+
+		// STEP 6: Eksekusi Engine Scan
+		if isHybrid {
+			// JALUR GEMINI
+			h.bot.Send(tgbotapi.NewMessage(chatID, "⏳ Gemini lagi baca struk lu..."))
+
+			imgData, _ := os.ReadFile(localPath)
+			result, err := h.txUsecase.ProcessScanHybrid2(context.Background(), user.ID, workspaceID, imgData, "image/jpeg")
+
+			if err != nil {
+				h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Gagal Gemini: "+err.Error()))
+			} else {
+				// Preview untuk Gemini
+				response := fmt.Sprintf("🎯 **Hasil Hybrid**\n\nMerchant: %s\nTotal: Rp%.2f\n\nSimpan?",
+					result.Transaction.Merchant, result.Transaction.Amount)
+				msg := tgbotapi.NewMessage(chatID, response)
+				msg.ParseMode = "Markdown"
+				msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+					tgbotapi.NewInlineKeyboardRow(
+						tgbotapi.NewInlineKeyboardButtonData("✅ Simpan", fmt.Sprintf("save_%d", result.Transaction.ID)),
+						tgbotapi.NewInlineKeyboardButtonData("❌ Hapus", fmt.Sprintf("delete_%d", result.Transaction.ID)),
+					),
+				)
+				h.bot.Send(msg)
+			}
+		} else {
+			// JALUR OCR SPACE
+			h.bot.Send(tgbotapi.NewMessage(chatID, "⏳ OCR Space lagi proses..."))
+
+			// Kirim localPath ke usecase
+			result, pendingID, err := h.txUsecase.ProcessScanAlternative(context.Background(), localPath, user.ID, workspaceID)
+
+			if err != nil {
+				h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Gagal OCR: "+err.Error()))
+			} else {
+				// Preview untuk OCR Space
+				text := fmt.Sprintf("🔍 **PREVIEW (OCR)**\n\n🏪 Merchant: %s\n💰 Total: Rp %v\n\nSimpan?",
+					result.Transaction.Merchant, result.Transaction.Amount)
+				msg := tgbotapi.NewMessage(chatID, text)
+				msg.ParseMode = "Markdown"
+				msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+					tgbotapi.NewInlineKeyboardRow(
+						tgbotapi.NewInlineKeyboardButtonData("✅ Confirm", fmt.Sprintf("confirm_alt:%d", pendingID)),
+						tgbotapi.NewInlineKeyboardButtonData("❌ Cancel", fmt.Sprintf("cancel_alt:%d", pendingID)),
+					),
+				)
+				h.bot.Send(msg)
+			}
+		}
+
+		// STEP 7: Pembersihan (Auto-Clean)
+		// File dihapus setelah diproses biar folder uploads gak jebol
+		os.Remove(localPath)
+		return
 	}
 
+	// STEP 8: Jalur Konfirmasi OCR Space (Final Save)
+	if strings.HasPrefix(data, "confirm_alt:") {
+		idStr := strings.TrimPrefix(data, "confirm_alt:")
+		pendingID, _ := strconv.Atoi(idStr)
+
+		err := h.txUsecase.ConfirmPendingTransaction(context.Background(), uint(pendingID))
+		if err != nil {
+			h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Gagal konfirmasi: "+err.Error()))
+		} else {
+			h.bot.Send(tgbotapi.NewEditMessageText(chatID, messageID, "✅ **Berhasil Disimpan!**"))
+		}
+		return
+	}
+
+	// STEP 9: Jalur Cancel OCR Space (Reject DB)
+	if strings.HasPrefix(data, "cancel_alt:") {
+		idStr := strings.TrimPrefix(data, "cancel_alt:")
+		pendingID, _ := strconv.Atoi(idStr)
+
+		// Update status di database jadi rejected
+		h.pendingRepo.UpdateStatus(uint(pendingID), "rejected")
+
+		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "🗑️ **Scan Dibatalkan.**")
+		h.bot.Send(editMsg)
+		return
+	}
+
+	// STEP 10: Jalur Save/Delete Lama (Hybrid)
+	if strings.HasPrefix(data, "save_") {
+		idStr := strings.TrimPrefix(data, "save_")
+		id, _ := strconv.Atoi(idStr)
+		h.txUsecase.ConfirmTransaction(context.Background(), uint(id))
+		h.bot.Send(tgbotapi.NewEditMessageText(chatID, messageID, "✅ **Tersimpan!**"))
+	} else if strings.HasPrefix(data, "delete_") {
+		idStr := strings.TrimPrefix(data, "delete_")
+		id, _ := strconv.Atoi(idStr)
+		h.txUsecase.HardDeleteTransaction(uint(id))
+		h.bot.Send(tgbotapi.NewEditMessageText(chatID, messageID, "🗑️ **Dihapus.**"))
+	}
+}
+
+func (h *TelegramHandler) handlePhoto(message *tgbotapi.Message) {
+	// 1. Validasi User
+	_, err := h.authRepo.GetByTelegramID(int64(message.From.ID))
+	if err != nil {
+		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "Akun belum terhubung!"))
+		return
+	}
+
+	// 2. Ambil FileID dari Telegram (resolusi tertinggi)
 	photos := message.Photo
 	fileID := photos[len(photos)-1].FileID
 	fileURL, _ := h.bot.GetFileDirectURL(fileID)
 
-	tempFile, err := os.CreateTemp("", "receipt-*.jpg")
-	if err != nil {
-		return
-	}
-	defer os.Remove(tempFile.Name())
-	defer tempFile.Close()
-
-	resp, err := http.Get(fileURL)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "Gagal download foto."))
-		return
-	}
+	// 3. Download foto ke folder uploads SEKARANG
+	resp, _ := http.Get(fileURL)
 	defer resp.Body.Close()
 
-	_, err = io.Copy(tempFile, resp.Body)
-	if err != nil {
-		return
-	}
+	// Gunakan Nanoseconds biar nama file unik & gak gampang ditebak
+	fileName := fmt.Sprintf("%d.jpg", time.Now().UnixNano())
+	localPath := "uploads/" + fileName
 
-	imgData, _ := os.ReadFile(tempFile.Name())
+	out, _ := os.Create(localPath)
+	io.Copy(out, resp.Body)
+	out.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "⏳ Bentar cuy, Gemini lagi baca struk lu..."))
-
-	result, err := h.txUsecase.ProcessScanHybrid2(ctx, user.ID, workspaceID, imgData, "image/jpeg")
-	if err != nil {
-		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "❌ Gagal scan: "+err.Error()))
-		return
-	}
-
-	response := fmt.Sprintf("🎯 **Hasil Scan Hybrid**\n\nMerchant: %s\nTotal: Rp%.2f\nMetode: %s\n\nSimpan sekarang?",
-		result.Transaction.Merchant, result.Transaction.Amount, result.Transaction.Method)
-
-	msg := tgbotapi.NewMessage(message.Chat.ID, response)
-	msg.ParseMode = "Markdown"
-
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+	// 4. Kirim tombol dengan CallbackData berisi NAMA FILE
+	msg := tgbotapi.NewMessage(message.Chat.ID, "Pilih metode scan, Mi:")
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("✅ Simpan", fmt.Sprintf("save_%d", result.Transaction.ID)),
-			tgbotapi.NewInlineKeyboardButtonData("❌ Hapus", fmt.Sprintf("delete_%d", result.Transaction.ID)),
+			tgbotapi.NewInlineKeyboardButtonData("Hybrid (Gemini)", "select_hybrid:"+fileName),
+			tgbotapi.NewInlineKeyboardButtonData("Alternatif (OCR Space)", "select_alt:"+fileName),
 		),
 	)
-	msg.ReplyMarkup = keyboard
 	h.bot.Send(msg)
 }
 

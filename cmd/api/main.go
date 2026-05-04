@@ -30,6 +30,7 @@ func main() {
 
 	ocrKey := os.Getenv("OCR_SPACE_API_KEY")
 	ocrClient := ocr.NewOCRSpaceClient(ocrKey)
+	pendingRepo := repository.NewPendingTransactionRepository(db)
 
 	// ---------------------------------------------------------
 	// 0. PKG LAYER (External Clients)
@@ -64,7 +65,7 @@ func main() {
 	tesseractClient := ocr.NewTesseractClient()
 	hybridScanner := ocr.NewHybridScanner(tesseractClient, geminiClient)
 
-	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient)
+	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient, pendingRepo)
 	txHandler := delivery.NewTransactionHandler(txUsecase)
 
 	// ---------------------------------------------------------
@@ -76,7 +77,7 @@ func main() {
 		log.Printf("⚠️ Gagal inisialisasi Telegram Bot: %v", err)
 	} else {
 		// Inisialisasi Handler Telegram
-		tgHandler := tgDelivery.NewTelegramHandler(bot, txUsecase, authUsecase, authRepo, wsUsecase, wsRepo)
+		tgHandler := tgDelivery.NewTelegramHandler(bot, txUsecase, authUsecase, authRepo, wsUsecase, wsRepo, pendingRepo)
 
 		// Jalankan Listener Telegram di Goroutine (Background)
 		go func() {

@@ -350,7 +350,7 @@ func (h *TransactionHandler) RejectEmail(w http.ResponseWriter, r *http.Request)
 func (h *TransactionHandler) ScanAlternative(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("📩 [Handler] Masuk ke ScanAlternative")
 
-	// 1. Ambil user_id (Sesuai middleware lo: key "user_id", tipe uint)
+	// 1. Ambil user_id dari context (Middleware Auth)
 	userID, ok := r.Context().Value("user_id").(uint)
 	if !ok {
 		fmt.Println("❌ [Handler] User ID not found in context or wrong type")
@@ -358,14 +358,14 @@ func (h *TransactionHandler) ScanAlternative(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// 2. Parse Multipart Form
+	// 2. Parse Multipart Form (Max 10MB)
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		fmt.Println("❌ [Handler] Parse Form Error:", err)
 		http.Error(w, "File too large", http.StatusBadRequest)
 		return
 	}
 
-	// 3. Ambil file & workspace_id
+	// 3. Ambil file struk
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		fmt.Println("❌ [Handler] FormFile Error:", err)
@@ -374,6 +374,7 @@ func (h *TransactionHandler) ScanAlternative(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 
+	// 4. Ambil workspace_id dari form
 	workspaceIDStr := r.FormValue("workspace_id")
 	wID, err := strconv.ParseUint(workspaceIDStr, 10, 32)
 	if err != nil {
@@ -381,9 +382,9 @@ func (h *TransactionHandler) ScanAlternative(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Invalid workspace_id", http.StatusBadRequest)
 		return
 	}
+	workspaceID := uint(wID)
 
-	// 4. Simpan file sementara
-	// Pake userID (uint) langsung buat nama file
+	// 5. Simpan file sementara secara lokal
 	filePath := fmt.Sprintf("uploads/%d_%s", userID, header.Filename)
 	dst, err := os.Create(filePath)
 	if err != nil {
@@ -393,12 +394,13 @@ func (h *TransactionHandler) ScanAlternative(w http.ResponseWriter, r *http.Requ
 	}
 	defer dst.Close()
 	io.Copy(dst, file)
-	defer os.Remove(filePath) // Hapus setelah kelar proses
+	defer os.Remove(filePath) // Bersihkan file setelah proses selesai
 
 	fmt.Println("📡 [Handler] Calling Usecase Alternative...")
 
-	// 5. Eksekusi Usecase
-	result, err := h.usecase.ProcessScanAlternative(r.Context(), filePath, userID, uint(wID))
+	// 6. Eksekusi Usecase (Menampung 3 return value: result, pendingID, err)
+	// Gunakan r.Context() untuk ctx, dan filePath untuk imagePath
+	result, pendingID, err := h.usecase.ProcessScanAlternative(r.Context(), filePath, userID, workspaceID)
 	if err != nil {
 		fmt.Println("❌ [Handler] Usecase Error:", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -407,9 +409,16 @@ func (h *TransactionHandler) ScanAlternative(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fmt.Println("✅ [Handler] Scan Success!")
+	// 7. Kirim Response sukses
+	// Kita bisa tambahkan PendingID ke dalam response kalau front-end butuh
+	fmt.Printf("✅ [Handler] Scan Success! Pending ID: %d\n", pendingID)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data":       result,
+		"pending_id": pendingID,
+		"message":    "Scan successful, please confirm to save.",
+	})
 }
 
 func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request) {
@@ -465,4 +474,27 @@ func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(map[string]string{
 		"message": "Transaction confirmed and saved successfully",
 	})
+}
+
+func (h *TransactionHandler) ConfirmScanAlternative(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		PendingID uint `json:"pending_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Panggil usecase confirm yang tadi kita buat
+	err := h.usecase.ConfirmPendingTransaction(r.Context(), request.PendingID)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Transaction confirmed and saved successfully"})
 }
