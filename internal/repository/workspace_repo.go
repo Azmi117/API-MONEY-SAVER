@@ -25,6 +25,9 @@ type WorkspaceRepository interface {
 	GetWorkspacesByOwner(ownerID uint) ([]models.Workspace, error)
 	GetByTelegramChatID(chatID int64) (*models.Workspace, error)
 	IsMember(workspaceID uint, userID uint) (bool, error)
+	GetActiveTarget(workspaceID uint, period string) (*models.Target, error)
+	GetActiveTargets(workspaceID uint, period string) ([]models.Target, error)
+	UpsertTarget(target *models.Target) error
 }
 
 type workspaceRepository struct {
@@ -172,4 +175,28 @@ func (r *workspaceRepository) IsMember(workspaceID uint, userID uint) (bool, err
 		Count(&count).Error
 
 	return count > 0, err
+}
+
+func (r *workspaceRepository) GetActiveTarget(workspaceID uint, period string) (*models.Target, error) {
+	var target models.Target
+	err := r.db.Where("workspace_id = ? AND period = ? AND is_active = ?", workspaceID, period, true).First(&target).Error
+	if err != nil {
+		return nil, err
+	}
+	return &target, nil
+}
+
+func (r *workspaceRepository) UpsertTarget(target *models.Target) error {
+	return r.db.Where(models.Target{WorkspaceID: target.WorkspaceID, Period: target.Period}).
+		Assign(models.Target{AmountLimit: target.AmountLimit, SavingsTarget: target.SavingsTarget, IsActive: true}).
+		FirstOrCreate(target).Error
+}
+
+func (r *workspaceRepository) GetActiveTargets(workspaceID uint, period string) ([]models.Target, error) {
+	var targets []models.Target // Gunakan Slice
+
+	// Pake .Find() bukan .First() supaya dapet semua baris yang cocok
+	err := r.db.Where("workspace_id = ? AND period = ?", workspaceID, period).Find(&targets).Error
+
+	return targets, err
 }
