@@ -45,14 +45,19 @@ func (h *TransactionHandler) CreateManual(w http.ResponseWriter, r *http.Request
 	// Sesuai diskusi, userID nanti diambil dari middleware JWT
 	userID := uint(1)
 
-	err := h.usecase.CreateManual(r.Context(), userID, req)
+	// TANGKAP 2 NILAI: notification dan err
+	notification, err := h.usecase.CreateManual(r.Context(), userID, req)
 	if err != nil {
 		SendError(w, apperror.Internal(err.Error()))
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Success record manual transaction"})
+	// Sertakan notification di dalam response agar Frontend bisa baca
+	json.NewEncoder(w).Encode(map[string]string{
+		"message":      "Success record manual transaction",
+		"notification": notification,
+	})
 }
 
 // 2. GET /transactions/history?workspace_id=1
@@ -235,13 +240,18 @@ func (h *TransactionHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	idStr := r.URL.Query().Get("id")
 	id, _ := strconv.Atoi(idStr)
 
-	err := h.usecase.ConfirmTransaction(r.Context(), uint(id))
+	// TANGKAP 2 NILAI: notification dan err
+	notification, err := h.usecase.ConfirmTransaction(r.Context(), uint(id))
 	if err != nil {
 		SendError(w, apperror.Internal(err.Error()))
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"message": "Success confirm transaction"})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message":      "Success confirm transaction",
+		"notification": notification,
+	})
 }
 
 func (h *TransactionHandler) ScanReceiptHybrid(w http.ResponseWriter, r *http.Request) {
@@ -317,18 +327,49 @@ func (h *TransactionHandler) GetPendingEmails(w http.ResponseWriter, r *http.Req
 
 // 2. APPROVE EMAIL LOG
 func (h *TransactionHandler) ApproveEmail(w http.ResponseWriter, r *http.Request) {
+	// 1. Ambil ID email_parsed dari URL parameter (:id)
 	logIDStr := r.PathValue("id")
 	logID, _ := strconv.ParseUint(logIDStr, 10, 32)
+
+	// 2. Ambil UserID dari context (hasil middleware Auth)
 	userID := r.Context().Value("user_id").(uint)
 
-	err := h.usecase.ApproveEmailLog(r.Context(), uint(logID), userID)
+	// 3. Dekode body request untuk mendapatkan WorkspaceID pilihan user
+	// Kita gunakan anonymous struct supaya simpel karena cuma butuh satu field
+	var body struct {
+		WorkspaceID uint `json:"workspace_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		SendError(w, apperror.BadRequest("Format request tidak valid, Mi"))
+		return
+	}
+
+	// 4. Validasi apakah workspace_id dikirim (cegah input kosong)
+	if body.WorkspaceID == 0 {
+		SendError(w, apperror.BadRequest("Wajib pilih workspace tujuan dulu, Mi!"))
+		return
+	}
+
+	// 5. Susun DTO ConfirmEmailRequest untuk dikirim ke UseCase
+	confirmReq := dto.ConfirmEmailRequest{
+		EmailParsedID: uint(logID),
+		WorkspaceID:   body.WorkspaceID,
+	}
+
+	// 6. Panggil UseCase baru yang melakukan mapping data dan pengecekan limit (The Guardian)
+	// Method ApproveEmailLog yang lama kita ganti ke ConfirmEmailTransaction
+	notification, err := h.usecase.ConfirmEmailTransaction(r.Context(), userID, confirmReq)
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
+	// 7. Kirim response sukses beserta notifikasi dari The Guardian jika ada
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Email approved and transaction created!"})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":               "Email approved and transaction created!",
+		"guardian_notification": notification, // Menampilkan info sisa jajan/tabungan
+	})
 }
 
 // 3. REJECT EMAIL LOG
@@ -486,8 +527,8 @@ func (h *TransactionHandler) ConfirmScanAlternative(w http.ResponseWriter, r *ht
 		return
 	}
 
-	// Panggil usecase confirm yang tadi kita buat
-	err := h.usecase.ConfirmPendingTransaction(r.Context(), request.PendingID)
+	// TANGKAP 2 NILAI: notification dan err
+	notification, err := h.usecase.ConfirmPendingTransaction(r.Context(), request.PendingID)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -496,5 +537,8 @@ func (h *TransactionHandler) ConfirmScanAlternative(w http.ResponseWriter, r *ht
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Transaction confirmed and saved successfully"})
+	json.NewEncoder(w).Encode(map[string]string{
+		"message":      "Transaction confirmed and saved successfully",
+		"notification": notification,
+	})
 }

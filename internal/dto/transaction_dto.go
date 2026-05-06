@@ -20,3 +20,18 @@ type ScanReceiptRequest struct {
 	Source      string `json:"source" default:"web"`
 	// Di level controller/handler nanti kita tangkap multipart.File-nya
 }
+
+// Tetap di file yang sama ya Mi
+type TelegramTransactionRequest struct {
+	RawMessage string  `json:"raw_message"`
+	UserID     uint    `json:"user_id"`
+	Amount     float64 `json:"amount"`
+	Type       string  `json:"type" validate:"oneof=income expense"` // Untuk nampung hasil hybrid
+	Source     string  `json:"source" default:"telegram"`
+}
+
+type UserTransactionSummary struct {
+	UserID   uint    `json:"user_id"`
+	UserName string  `json:"user_name"`
+	Total    float64 `json:"total"`
+}

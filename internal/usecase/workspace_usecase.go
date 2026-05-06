@@ -1,10 +1,12 @@
 package usecase
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/Azmi117/API-MONEY-SAVER.git/internal/dto"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/repository"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
@@ -15,15 +17,15 @@ type WorkspaceUsecase interface {
 	GetUserWorkspaces(userID uint) ([]models.Workspace, error)
 	UpdateWorkspace(workspaceID uint, userID uint, newName string) error
 	DeleteWorkspace(workspaceID uint, userID uint) error
-
 	InviteMember(workspaceID uint, ownerID uint, email string) error
 	GetPendingInvitations(userID uint) ([]models.WorkspaceInvitation, error)
 	AcceptInvitation(invitationID uint, userID uint) error
 	RejectInvitation(invitationID uint, userID uint) error
-
 	UpgradeTier(userID uint, newTier string) error
 	InitGroupConnection(telegramUserID int64, workspaceID uint, telegramChatID int64) error
 	GetUserWorkspaceList(telegramUserID int64) (string, error)
+	SetTarget(req dto.SetTargetRequest) error
+	CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64) (*models.Workspace, error)
 }
 
 type workspaceUsecase struct {
@@ -213,4 +215,47 @@ func (u *workspaceUsecase) GetUserWorkspaceList(telegramUserID int64) (string, e
 	sb.WriteString("\nKetik `/init [ID]` di Grup buat hubungin.")
 
 	return sb.String(), nil
+}
+
+func (u *workspaceUsecase) SetTarget(req dto.SetTargetRequest) error {
+	target := &models.Target{
+		WorkspaceID:   req.WorkspaceID,
+		Period:        req.Period,
+		AmountLimit:   req.AmountLimit,
+		SavingsTarget: req.SavingsTarget,
+		IsActive:      true,
+	}
+	return u.workspaceRepo.UpsertTarget(target)
+}
+
+func (u *workspaceUsecase) CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64) (*models.Workspace, error) {
+	// 1. Cari User berdasarkan Telegram ID
+	user, err := u.authRepo.GetByTelegramID(telegramID)
+	if err != nil {
+		return nil, apperror.Unauthorized("Akun lu belum ter-bind, Mi! Bind dulu di private chat.")
+	}
+
+	// 2. Cek kuota berdasarkan AccountTier (Sesuai logic CreateWorkspace lu)
+	existingWorkspaces, _ := u.workspaceRepo.FindByOwnerID(user.ID)
+	count := len(existingWorkspaces)
+
+	if user.AccountTier == "free" && count >= 2 {
+		return nil, apperror.UnprocessableEntity("Workspace limit reached: FREE tier is limited to 2 workspaces!")
+	}
+	if user.AccountTier == "pro" && count >= 10 {
+		return nil, apperror.UnprocessableEntity("Workspace limit reached: PRO tier is limited to 10 workspaces!")
+	}
+
+	// 3. Buat Workspace Baru dengan TelegramChatID
+	workspace := &models.Workspace{
+		Name:           chatTitle,
+		OwnerID:        user.ID,
+		TelegramChatID: &chatID, // Pastikan field ini ada di model Workspace lu
+	}
+
+	if err := u.workspaceRepo.Create(workspace); err != nil {
+		return nil, err
+	}
+
+	return workspace, nil
 }

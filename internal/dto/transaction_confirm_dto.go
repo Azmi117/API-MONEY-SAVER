@@ -12,3 +12,8 @@ type ConfirmTransactionRequest struct {
 	Note        string                   `json:"note"`
 	Items       []models.TransactionItem `json:"items"`
 }
+
+type ConfirmEmailRequest struct {
+	EmailParsedID uint `json:"email_parsed_id" binding:"required"`
+	WorkspaceID   uint `json:"workspace_id" binding:"required"`
+}

@@ -3,8 +3,11 @@ package repository
 import (
 	"time"
 
+	"github.com/Azmi117/API-MONEY-SAVER.git/internal/dto"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
+
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TransactionRepository interface {
@@ -21,6 +24,14 @@ type TransactionRepository interface {
 	UpdateEmailLogStatus(id uint, status string) error
 	GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error)
 	GetEmailLogByID(id uint) (*models.EmailParsed, error)
+	GetTotalAmountByType(workspaceID uint, txType string, period string) (float64, error)
+	FindByID(tx *models.Transaction, id uint) error
+	GetTotalByMonth(workspaceID uint, period string) (float64, error)
+	GetTotalSavings(workspaceID uint, period string) (float64, error)
+	GetEmailParsedByID(id uint) (*models.EmailParsed, error)
+	DeleteEmailParsed(id uint) error
+	GetSummaryByWorkspace(workspaceID uint, txType string, month string) ([]dto.UserTransactionSummary, error)
+	GetTotalByWorkspace(workspaceID uint, txType string, month string) (float64, error)
 }
 
 type transactionRepository struct {
@@ -29,6 +40,10 @@ type transactionRepository struct {
 
 func NewTransactionRepository(db *gorm.DB) TransactionRepository {
 	return &transactionRepository{db}
+}
+
+func (r *transactionRepository) FindByID(tx *models.Transaction, id uint) error {
+	return r.db.First(tx, id).Error
 }
 
 func (r *transactionRepository) Create(transaction *models.Transaction) error {
@@ -88,7 +103,11 @@ func (r *transactionRepository) HardDelete(id uint) error {
 }
 
 func (r *transactionRepository) CreateEmailLog(emailLog *models.EmailParsed) error {
-	return r.db.Create(emailLog).Error
+	// TAMBAHIN INI: Biar kalau GmailID duplikat, dia diem aja (DoNothing) gak bikin server error
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "gmail_id"}},
+		DoNothing: true,
+	}).Create(emailLog).Error
 }
 
 func (r *transactionRepository) GetEmailLogByGmailID(gmailID string) (*models.EmailParsed, error) {
@@ -117,4 +136,78 @@ func (r *transactionRepository) GetPendingEmailLogs(userID uint) ([]models.Email
 	var logs []models.EmailParsed
 	err := r.db.Where("user_id = ? AND status = ?", userID, "Pending").Find(&logs).Error
 	return logs, err
+}
+
+func (r *transactionRepository) GetTotalAmountByType(workspaceID uint, txType string, period string) (float64, error) {
+	var total float64
+	// Menggunakan to_char untuk mencocokkan CreatedAt dengan format "YYYY-MM"
+	err := r.db.Model(&models.Transaction{}).
+		Where("workspace_id = ? AND type = ? AND to_char(created_at, 'YYYY-MM') = ?", workspaceID, txType, period).
+		Select("COALESCE(SUM(amount), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
+func (r *transactionRepository) GetTotalByMonth(workspaceID uint, period string) (float64, error) {
+	var total float64
+	err := r.db.Model(&models.Transaction{}).
+		Select("COALESCE(SUM(amount), 0)").
+		// UBAH DISINI: Ganti DATE_FORMAT jadi to_char
+		Where("workspace_id = ? AND to_char(date, 'YYYY-MM') = ? AND type = ?", workspaceID, period, "expense").
+		Scan(&total).Error
+
+	return total, err
+}
+
+func (r *transactionRepository) GetTotalSavings(workspaceID uint, period string) (float64, error) {
+	var total float64
+	err := r.db.Model(&models.Transaction{}).
+		Select("COALESCE(SUM(amount), 0)").
+		// UBAH DISINI: Ganti DATE_FORMAT jadi to_char
+		Where("workspace_id = ? AND to_char(date, 'YYYY-MM') = ? AND type = ?", workspaceID, period, "savings").
+		Scan(&total).Error
+
+	return total, err
+}
+
+func (r *transactionRepository) GetEmailParsedByID(id uint) (*models.EmailParsed, error) {
+	var emailData models.EmailParsed
+	// Nyari data mentah berdasarkan ID yang dikirim dari cegatan Web
+	err := r.db.First(&emailData, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &emailData, nil
+}
+
+func (r *transactionRepository) DeleteEmailParsed(id uint) error {
+	// Hapus data dari table email_parsed supaya gak muncul lagi di list "Pending Approval"
+	return r.db.Delete(&models.EmailParsed{}, id).Error
+}
+
+func (r *transactionRepository) GetSummaryByWorkspace(workspaceID uint, txType string, month string) ([]dto.UserTransactionSummary, error) {
+	var summaries []dto.UserTransactionSummary
+
+	err := r.db.Table("transactions").
+		Select("transactions.user_id, users.name as user_name, SUM(transactions.amount) as total").
+		Joins("JOIN users ON users.id = transactions.user_id").
+		Where("transactions.workspace_id = ? AND transactions.type = ? AND TO_CHAR(transactions.date, 'YYYY-MM') = ?",
+			workspaceID, txType, month).
+		Group("transactions.user_id, users.name").
+		Scan(&summaries).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return summaries, nil
+}
+
+func (r *transactionRepository) GetTotalByWorkspace(workspaceID uint, txType string, month string) (float64, error) {
+	var total float64
+	err := r.db.Table("transactions").
+		Where("workspace_id = ? AND type = ? AND TO_CHAR(date, 'YYYY-MM') = ?", workspaceID, txType, month).
+		Select("COALESCE(SUM(amount), 0)").
+		Scan(&total).Error
+	return total, err
 }

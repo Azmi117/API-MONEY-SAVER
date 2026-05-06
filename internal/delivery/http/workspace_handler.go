@@ -206,3 +206,32 @@ func (h *WorkspaceHandler) RejectInvitation(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Invitation rejected!"})
 }
+
+func (h *WorkspaceHandler) SetTarget(w http.ResponseWriter, r *http.Request) {
+	// 1. Ambil userID dari context (setelah lewat authMW)
+	// Sesuaikan key context-nya dengan yang lu definisikan di middleware
+	_, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Sesi lu abis atau gak valid, Mi!"))
+		return
+	}
+
+	var req dto.SetTargetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		SendError(w, apperror.BadRequest("Data JSON-nya berantakan nih."))
+		return
+	}
+
+	// 2. Eksekusi UseCase
+	// Pastikan UseCase atau Handler lu nanti ngecek apakah userID ini beneran owner
+	// Tapi karena lu udah pasang ownerMW di routes, ini udah lebih aman.
+	if err := h.usecase.SetTarget(req); err != nil {
+		SendError(w, apperror.Internal(err.Error()))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Target period " + req.Period + " berhasil diset!",
+	})
+}

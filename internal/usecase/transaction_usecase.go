@@ -24,9 +24,9 @@ import (
 )
 
 type TransactionUsecase interface {
-	CreateManual(ctx context.Context, userID uint, req dto.CreateTransactionRequest) error
+	CreateManual(ctx context.Context, userID uint, req dto.CreateTransactionRequest) (string, error)
 	ProcessScan(ctx context.Context, userID uint, workspaceID uint, imgData []byte, mimeType string) (*models.Transaction, error)
-	ConfirmTransaction(ctx context.Context, transactionID uint) error
+	ConfirmTransaction(ctx context.Context, id uint) (string, error)
 	SyncGmailTransactions(ctx context.Context) error
 	ProcessEmailMandiri(ctx context.Context, userID uint, workspaceID uint, subject string, body string) (*models.Transaction, error)
 	GetHistory(workspaceID uint) ([]models.Transaction, error)
@@ -38,12 +38,16 @@ type TransactionUsecase interface {
 	GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error)
 	ProcessScanAlternative(ctx context.Context, imagePath string, userID uint, workspaceID uint) (*dto.ProcessScanHybridResult, uint, error)
 	ConfirmScanTransaction(ctx context.Context, txData models.Transaction, items []models.TransactionItem) error
-	ConfirmPendingTransaction(ctx context.Context, pendingID uint) error
+	ConfirmPendingTransaction(ctx context.Context, pendingID uint) (string, error)
+	CheckWorkspaceTarget(workspaceID uint) (string, error)
+	ConfirmEmailTransaction(ctx context.Context, userID uint, req dto.ConfirmEmailRequest) (string, error)
+	ProcessTelegramInput(ctx context.Context, msg string) (string, bool, float64)
 }
 
 type transactionUsecase struct {
 	repo           repository.TransactionRepository
 	authRepo       repository.AuthRepository
+	targetRepo     repository.TargetRepository
 	pendingRepo    repository.PendingTransactionRepository
 	googleService  service.GoogleAuthService
 	geminiClient   *gemini.GeminiClient
@@ -52,7 +56,7 @@ type transactionUsecase struct {
 	ocrSpaceClient *ocr.OCRSpaceClient
 }
 
-func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient, pendingRepo repository.PendingTransactionRepository) TransactionUsecase {
+func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient, pendingRepo repository.PendingTransactionRepository, targetRepo repository.TargetRepository) TransactionUsecase {
 	return &transactionUsecase{
 		repo:           repo,
 		authRepo:       authRepo,
@@ -62,19 +66,24 @@ func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repos
 		wsRepo:         wsRepo,
 		ocrSpaceClient: ocrSpace,
 		pendingRepo:    pendingRepo,
+		targetRepo:     targetRepo,
 	}
 }
 
-func (u *transactionUsecase) CreateManual(ctx context.Context, userID uint, req dto.CreateTransactionRequest) error {
+func (u *transactionUsecase) CreateManual(ctx context.Context, userID uint, req dto.CreateTransactionRequest) (string, error) {
+	// 1. Standarisasi nama merchant menjadi lowercase dan hapus spasi berlebih
 	cleanMerchant := strings.ToLower(strings.TrimSpace(req.Merchant))
+
+	// 2. Validasi Duplikasi: Cegah input double untuk data yang sama di hari yang sama
 	isDuplicate, err := u.repo.IsDuplicate(req.WorkspaceID, req.Amount, cleanMerchant, req.Date)
 	if err != nil {
-		return apperror.Internal("Failed to check transaction duplicates!")
+		return "", apperror.Internal("Failed to check transaction duplicates!")
 	}
 	if isDuplicate {
-		return apperror.Conflict("Similar transaction has already been recorded!")
+		return "", apperror.Conflict("Similar transaction has already been recorded!")
 	}
 
+	// 3. Mapping data dari DTO Request ke Model Database
 	tx := &models.Transaction{
 		UserID:      userID,
 		WorkspaceID: req.WorkspaceID,
@@ -86,23 +95,37 @@ func (u *transactionUsecase) CreateManual(ctx context.Context, userID uint, req 
 		Merchant:    cleanMerchant,
 		Method:      req.Method,
 		Source:      req.Source,
-		Status:      "approved",
+		Status:      "approved", // Manual chat langsung dianggap approved
 		GmailID:     req.GmailID,
 	}
 
+	// 4. Validasi Otoritas: Pastikan user yang input adalah member dari workspace tersebut
 	isMember, err := u.wsRepo.IsMember(req.WorkspaceID, userID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !isMember {
-		return errors.New("akses ditolak: lu bukan member di workspace ini")
+		return "", errors.New("akses ditolak: lu bukan member di workspace ini")
 	}
 
+	// 5. Simpan transaksi ke database utama
 	if err := u.repo.Create(tx); err != nil {
-		return apperror.Internal("Failed to save manual transaction!")
+		return "", apperror.Internal("Failed to save manual transaction!")
 	}
 
-	return nil
+	// 6. LOGIC THE GUARDIAN: Hitung akumulasi budget bulanan setelah transaksi disimpan
+	notification, err := u.CheckWorkspaceTarget(req.WorkspaceID)
+	if err != nil {
+		log.Printf("Target Check Error: %v", err)
+		return "Transaksi dicatat!", nil
+	}
+
+	// Jika pengeluaran melebihi limit atau tabungan bertambah, kembalikan pesannya
+	if notification != "" {
+		return fmt.Sprintf("Sip! Udah dicatat ya. \n\n%s", notification), nil
+	}
+
+	return "Transaksi berhasil dicatat!", nil
 }
 
 func (u *transactionUsecase) ProcessScan(ctx context.Context, userID uint, workspaceID uint, imgData []byte, mimeType string) (*models.Transaction, error) {
@@ -220,8 +243,9 @@ func (u *transactionUsecase) SyncGmailTransactions(ctx context.Context) error {
 
 			// --- POINT PENTING: GmailID WAJIB DIISI ---
 			emailLog := &models.EmailParsed{
-				UserID:     user.ID,
-				RawEmail:   bodyStr,
+				UserID: user.ID,
+				// RawEmail:   bodyStr,
+				RawEmail:   "HTML Content Truncated",
 				BankSource: "Mandiri",
 				Status:     "Pending",
 				GmailID:    m.Id, // <--- INI JANGAN SAMPE KETINGGALAN LAGI MI!
@@ -481,12 +505,31 @@ func (u *transactionUsecase) RejectEmailLog(ctx context.Context, logID uint, use
 	return u.repo.UpdateEmailLogStatus(logID, "Rejected")
 }
 
-func (u *transactionUsecase) ConfirmTransaction(ctx context.Context, transactionID uint) error {
-	err := u.repo.UpdateStatus(transactionID, "approved")
-	if err != nil {
-		return apperror.NotFound("Transaction record not found to confirm!")
+func (u *transactionUsecase) ConfirmTransaction(ctx context.Context, id uint) (string, error) {
+	// 1. Cari data transaksi di database
+	var tx models.Transaction
+	if err := u.repo.FindByID(&tx, id); err != nil {
+		return "", err
 	}
-	return nil
+
+	// 2. Update status transaksi menjadi approved
+	if err := u.repo.UpdateStatus(id, "approved"); err != nil {
+		return "", err
+	}
+
+	// 3. LOGIC THE GUARDIAN: Cek sisa budget atau progres tabungan
+	notification, err := u.CheckWorkspaceTarget(tx.WorkspaceID)
+	if err != nil {
+		// Log error tapi transaksi tetap dianggap sukses dikonfirmasi
+		log.Printf("Target Check Error (Hybrid): %v", err)
+		return "Transaksi berhasil dikonfirmasi!", nil
+	}
+
+	if notification != "" {
+		return fmt.Sprintf("Transaksi Berhasil! \n\n%s", notification), nil
+	}
+
+	return "Transaksi berhasil dikonfirmasi!", nil
 }
 
 func (u *transactionUsecase) GetHistory(workspaceID uint) ([]models.Transaction, error) {
@@ -587,32 +630,49 @@ func (u *transactionUsecase) ConfirmScanTransaction(ctx context.Context, txData 
 	return u.repo.Create(&txData)
 }
 
-func (u *transactionUsecase) ConfirmPendingTransaction(ctx context.Context, pendingID uint) error {
-	// 1. Ambil data dari tabel penampung
+func (u *transactionUsecase) ConfirmPendingTransaction(ctx context.Context, pendingID uint) (string, error) {
+	// 1. Ambil data dari tabel penampung (pending_transactions) berdasarkan ID
 	pending, err := u.pendingRepo.FindByID(pendingID)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	// 2. Decode JSON mentah
+	// 2. Decode JSON mentah dari field RawData ke struct Transaction
 	var txData models.Transaction
 	if err := json.Unmarshal([]byte(pending.RawData), &txData); err != nil {
-		return err
+		return "", err
 	}
 
-	// --- PERBAIKAN DI SINI ---
-	// Set status transaksi jadi approved sebelum disimpan ke tabel utama
+	// 3. Set status transaksi menjadi "approved" agar masuk sebagai transaksi resmi
 	txData.Status = "approved"
-	// -------------------------
 
-	// 3. Simpan ke tabel transactions permanen
+	// 4. Pindahkan data ke tabel transaksi permanen
+	// Method ini biasanya mengurusi penyimpanan Transaction dan TransactionItems sekaligus
 	err = u.ConfirmScanTransaction(ctx, txData, txData.TransactionItems)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	// 4. Update status di tabel pending agar sinkron
-	return u.pendingRepo.UpdateStatus(pendingID, "approved")
+	// 5. Update status di tabel pending menjadi "approved" agar tidak diproses ulang
+	if err := u.pendingRepo.UpdateStatus(pendingID, "approved"); err != nil {
+		return "", err
+	}
+
+	// 6. LOGIC THE GUARDIAN: Cek apakah transaksi ini menyentuh limit atau target tabungan
+	// Kita panggil method pengecekan target yang sudah dibuat sebelumnya
+	notification, err := u.CheckWorkspaceTarget(txData.WorkspaceID)
+	if err != nil {
+		// Kita log error-nya tapi tetap return sukses karena transaksi utama sudah berhasil disimpan
+		log.Printf("Target Check Error: %v", err)
+		return "Transaksi berhasil dikonfirmasi!", nil
+	}
+
+	// Jika ada notifikasi (limit jebol atau progres tabungan), kirimkan pesannya
+	if notification != "" {
+		return fmt.Sprintf("Transaksi Berhasil! \n\n%s", notification), nil
+	}
+
+	return "Transaksi berhasil dikonfirmasi!", nil
 }
 
 // Helper Parser tanpa Gemini
@@ -783,4 +843,119 @@ func (u *transactionUsecase) manualParserV3(raw string) (string, float64, time.T
 	}
 
 	return merchant, amount, transactionDate, items
+}
+
+func (u *transactionUsecase) CheckWorkspaceTarget(workspaceID uint) (string, error) {
+	month := time.Now().Format("2006-01")
+
+	// 1. Ambil data target bulan ini (Bukan dari model Workspace langsung)
+	target, err := u.targetRepo.GetByWorkspaceAndPeriod(workspaceID, month)
+	if err != nil {
+		// Kalau target belum diset, kita kasih default 0 atau error handling
+		return "⚠️ Target untuk bulan ini belum diatur, Mi! Pakai command set target dulu.", nil
+	}
+
+	// 2. Ambil Total Global (Expense & Savings)
+	totalExpense, _ := u.repo.GetTotalByWorkspace(workspaceID, "expense", month)
+	totalSavings, _ := u.repo.GetTotalByWorkspace(workspaceID, "savings", month)
+
+	// 3. Ambil Rincian Per Member
+	expenseSummaries, _ := u.repo.GetSummaryByWorkspace(workspaceID, "expense", month)
+	savingsSummaries, _ := u.repo.GetSummaryByWorkspace(workspaceID, "savings", month)
+
+	// 4. Rangkai Pesan
+	res := fmt.Sprintf("📊 *Status Budget Bulan %s*\n\n", month)
+
+	// Bagian Expense
+	res += "💸 *Limit (Expense):*\n"
+	res += fmt.Sprintf("🚨 Rp%.2f / Rp%.2f\n", totalExpense, target.AmountLimit)
+	res += fmt.Sprintf("Sisa: Rp%.2f\n\n", target.AmountLimit-totalExpense)
+
+	if len(expenseSummaries) > 0 {
+		res += "👤 *Rincian :*\n"
+		for _, s := range expenseSummaries {
+			res += fmt.Sprintf("- %s: Rp%.2f\n", s.UserName, s.Total)
+		}
+		res += "\n"
+	}
+
+	// Bagian Savings
+	res += "💰 *Progres Tabungan (Savings):*\n"
+	res += fmt.Sprintf("📈 Rp%.2f / Rp%.2f\n\n", totalSavings, target.SavingsTarget)
+
+	if len(savingsSummaries) > 0 {
+		res += "👤 *Rincian Nabung:*\n"
+		for _, s := range savingsSummaries {
+			res += fmt.Sprintf("- %s: Rp%.2f\n", s.UserName, s.Total)
+		}
+	}
+
+	return res, nil
+}
+
+func (u *transactionUsecase) ConfirmEmailTransaction(ctx context.Context, userID uint, req dto.ConfirmEmailRequest) (string, error) {
+	// 1. Ambil data mentah dari table email_parsed
+	emailData, err := u.repo.GetEmailParsedByID(req.EmailParsedID)
+	if err != nil {
+		return "", err
+	}
+
+	// 2. Mapping ke Model Transaction Utama
+	// Langsung pake emailData.ParsedDate karena tipenya udah sama-sama time.Time
+	newTransaction := &models.Transaction{
+		UserID:      userID,
+		WorkspaceID: req.WorkspaceID, // ID pilihan user dari cegatan
+		Amount:      emailData.Amount,
+		Merchant:    emailData.Merchant,
+		Date:        emailData.ParsedDate, // Langsung pasang disini
+		Type:        "expense",
+		Source:      "Email",
+		Status:      "approved",
+		GmailID:     emailData.GmailID, // Pastiin G dan ID kapital[cite: 1]
+	}
+
+	// 3. Simpan ke database table transactions
+	if err := u.repo.Create(newTransaction); err != nil {
+		return "", err
+	}
+
+	// 4. Hapus data draf di table email_parsed (Ruang Tunggu)
+	_ = u.repo.DeleteEmailParsed(req.EmailParsedID)
+
+	// 5. Jalankan The Guardian (Cek limit budget)
+	notification, _ := u.CheckWorkspaceTarget(req.WorkspaceID)
+
+	return notification, nil
+}
+
+func (u *transactionUsecase) ProcessTelegramInput(ctx context.Context, msg string) (string, bool, float64) {
+	// 1. Cek simbol di awal atau di akhir pesan
+	isIncome := strings.Contains(msg, "+")
+	isExpense := strings.Contains(msg, "-")
+
+	// 2. Ekstrak angka (pake regex lu yang lama)
+	amount := u.extractAmount(msg)
+
+	// 3. Logic Hybrid
+	if isIncome {
+		return "income", true, amount
+	}
+	if isExpense {
+		return "expense", true, amount
+	}
+
+	// 4. Kalau gak ada tanda, kembalikan false buat memicu munculnya button
+	return "", false, amount
+}
+
+func (u *transactionUsecase) extractAmount(msg string) float64 {
+	re := regexp.MustCompile(`(\d+)`)
+	match := re.FindString(msg)
+
+	// Cek apakah string-nya tidak kosong, bukan dibandingin sama nil
+	if match != "" {
+		amount, _ := strconv.ParseFloat(match, 64)
+		return amount
+	}
+	return 0
 }

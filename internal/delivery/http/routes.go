@@ -41,6 +41,7 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("GET "+prefix+"workspaces", authMW(wH.GetMyWorkspaces))
 	mux.HandleFunc("PUT "+prefix+"workspaces", authMW(ownerMW(wH.UpdateWorkspace)))
 	mux.HandleFunc("DELETE "+prefix+"workspaces", authMW(ownerMW(wH.DeleteWorkspace)))
+	mux.HandleFunc("POST "+prefix+"workspaces/target", authMW(wH.SetTarget))
 
 	// --- INVITATION ROUTES ---
 	mux.HandleFunc("POST "+prefix+"workspaces/{id}/invite", authMW(wH.Invite))

@@ -6,7 +6,7 @@ type Workspace struct {
 	gorm.Model
 	Name           string `gorm:"type:varchar(100);not null" json:"name"`
 	OwnerID        uint   `gorm:"not null" json:"owner_id"`
-	TelegramChatID int64  `gorm:"uniqueIndex"`
+	TelegramChatID *int64 `gorm:"uniqueIndex"`
 
 	// --- RELATIONSHIPS ---
 	Owner        User                  `gorm:"foreignKey:OwnerID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
