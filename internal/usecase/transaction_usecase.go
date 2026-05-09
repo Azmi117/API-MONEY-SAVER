@@ -37,16 +37,18 @@ type TransactionUsecase interface {
 	RejectEmailLog(ctx context.Context, logID uint, userID uint) error
 	GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error)
 	ProcessScanAlternative(ctx context.Context, imagePath string, userID uint, workspaceID uint) (*dto.ProcessScanHybridResult, uint, error)
-	ConfirmScanTransaction(ctx context.Context, txData models.Transaction, items []models.TransactionItem) error
+	ConfirmScanTransaction(ctx context.Context, txData *models.Transaction, items []models.TransactionItem) error
 	ConfirmPendingTransaction(ctx context.Context, pendingID uint) (string, error)
 	CheckWorkspaceTarget(workspaceID uint) (string, error)
 	ConfirmEmailTransaction(ctx context.Context, userID uint, req dto.ConfirmEmailRequest) (string, error)
 	ProcessTelegramInput(ctx context.Context, msg string) (string, bool, float64)
+	AssignSplitBill(ctx context.Context, transactionID uint, items []dto.SplitItemRequest) error
 }
 
 type transactionUsecase struct {
 	repo           repository.TransactionRepository
 	authRepo       repository.AuthRepository
+	debtRepo       repository.DebtRepository
 	targetRepo     repository.TargetRepository
 	pendingRepo    repository.PendingTransactionRepository
 	googleService  service.GoogleAuthService
@@ -56,7 +58,7 @@ type transactionUsecase struct {
 	ocrSpaceClient *ocr.OCRSpaceClient
 }
 
-func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient, pendingRepo repository.PendingTransactionRepository, targetRepo repository.TargetRepository) TransactionUsecase {
+func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient, pendingRepo repository.PendingTransactionRepository, targetRepo repository.TargetRepository, debtRepo repository.DebtRepository) TransactionUsecase {
 	return &transactionUsecase{
 		repo:           repo,
 		authRepo:       authRepo,
@@ -67,6 +69,7 @@ func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repos
 		ocrSpaceClient: ocrSpace,
 		pendingRepo:    pendingRepo,
 		targetRepo:     targetRepo,
+		debtRepo:       debtRepo,
 	}
 }
 
@@ -621,13 +624,13 @@ func (u *transactionUsecase) ProcessScanAlternative(ctx context.Context, imagePa
 	}, pending.ID, nil
 }
 
-func (u *transactionUsecase) ConfirmScanTransaction(ctx context.Context, txData models.Transaction, items []models.TransactionItem) error {
+func (u *transactionUsecase) ConfirmScanTransaction(ctx context.Context, txData *models.Transaction, items []models.TransactionItem) error {
 	// 1. Set relasi items ke header transaction
 	txData.TransactionItems = items
 
 	// 2. Simpan ke Database (Sekali jalan karena sudah ada relasi di struct)
 	// Ini bakal nge-save ke tabel transactions DAN transaction_items otomatis via GORM
-	return u.repo.Create(&txData)
+	return u.repo.CreateWithItems(txData)
 }
 
 func (u *transactionUsecase) ConfirmPendingTransaction(ctx context.Context, pendingID uint) (string, error) {
@@ -648,7 +651,7 @@ func (u *transactionUsecase) ConfirmPendingTransaction(ctx context.Context, pend
 
 	// 4. Pindahkan data ke tabel transaksi permanen
 	// Method ini biasanya mengurusi penyimpanan Transaction dan TransactionItems sekaligus
-	err = u.ConfirmScanTransaction(ctx, txData, txData.TransactionItems)
+	err = u.ConfirmScanTransaction(ctx, &txData, txData.TransactionItems)
 	if err != nil {
 		return "", err
 	}
@@ -958,4 +961,63 @@ func (u *transactionUsecase) extractAmount(msg string) float64 {
 		return amount
 	}
 	return 0
+}
+
+func (u *transactionUsecase) AssignSplitBill(ctx context.Context, transactionID uint, items []dto.SplitItemRequest) error {
+	// 1. Ambil data asli dari DB (Acuan Satpam)
+	var originalTx models.Transaction
+	// Pake FindByID sesuai method di repo lu
+	if err := u.repo.FindByID(&originalTx, transactionID); err != nil {
+		return fmt.Errorf("transaksi dengan ID %d kagak ketemu, Mi", transactionID)
+	}
+
+	// 2. Map buat simpan quantity asli dari DB
+	// Pastiin TransactionItems udah ikut ke-load pas FindByID (Preload)
+	originalQtyMap := make(map[string]int)
+	for _, actualItem := range originalTx.TransactionItems {
+		name := strings.TrimSpace(actualItem.Description)
+		originalQtyMap[name] = actualItem.Quantity
+	}
+
+	// 3. Validasi Quantity Input vs Data di DB
+	inputQtyMap := make(map[string]int)
+	userDebts := make(map[uint]float64)
+
+	for _, input := range items {
+		itemName := strings.TrimSpace(input.ItemName)
+		inputQtyMap[itemName] += input.Quantity
+
+		qtyInDB, exists := originalQtyMap[itemName]
+		if !exists {
+			return fmt.Errorf("item '%s' gak ada di struk asli", itemName)
+		}
+
+		if inputQtyMap[itemName] > qtyInDB {
+			return fmt.Errorf("item '%s' kelebihan: di struk cuma %d, tapi lu tag total %d",
+				itemName, qtyInDB, inputQtyMap[itemName])
+		}
+
+		// 4. Hitung akumulasi utang
+		if input.UserID != originalTx.UserID {
+			userDebts[input.UserID] += (input.Price * float64(input.Quantity))
+		}
+	}
+
+	// 5. Simpan ke tabel Debts (Logic manual tanpa saveDebts terpisah)
+	if len(userDebts) > 0 {
+		var debtsToSave []models.Debt
+		for targetUserID, totalAmount := range userDebts {
+			debtsToSave = append(debtsToSave, models.Debt{
+				WorkspaceID: originalTx.WorkspaceID,
+				FromUserID:  targetUserID,
+				ToUserID:    originalTx.UserID,
+				Amount:      totalAmount,
+				Note:        "Split bill dari merchant: " + originalTx.Merchant,
+				IsPaid:      false,
+			})
+		}
+		return u.debtRepo.CreateInBatch(debtsToSave)
+	}
+
+	return nil
 }

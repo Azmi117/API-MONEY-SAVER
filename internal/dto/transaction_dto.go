@@ -35,3 +35,15 @@ type UserTransactionSummary struct {
 	UserName string  `json:"user_name"`
 	Total    float64 `json:"total"`
 }
+
+type SplitItemRequest struct {
+	ItemName string  `json:"item_name"`
+	UserID   uint    `json:"user_id"`
+	Quantity int     `json:"quantity"`
+	Price    float64 `json:"price"`
+}
+
+type SplitBillRequest struct {
+	TransactionID uint               `json:"transaction_id"`
+	Items         []SplitItemRequest `json:"items"`
+}

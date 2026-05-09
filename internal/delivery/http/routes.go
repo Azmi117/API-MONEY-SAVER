@@ -42,6 +42,7 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("PUT "+prefix+"workspaces", authMW(ownerMW(wH.UpdateWorkspace)))
 	mux.HandleFunc("DELETE "+prefix+"workspaces", authMW(ownerMW(wH.DeleteWorkspace)))
 	mux.HandleFunc("POST "+prefix+"workspaces/target", authMW(wH.SetTarget))
+	mux.HandleFunc("GET "+prefix+"workspaces/{id}/members", authMW(wH.GetMembers))
 
 	// --- INVITATION ROUTES ---
 	mux.HandleFunc("POST "+prefix+"workspaces/{id}/invite", authMW(wH.Invite))
@@ -57,6 +58,7 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("POST "+prefix+"transactions/scan-hybrid2", authMW(tH.ScanReceiptHybrid))
 	mux.HandleFunc("POST "+prefix+"transactions/scan-alt", authMW(tH.ScanAlternative))
 	mux.HandleFunc("POST "+prefix+"transactions/scan-alt/confirm", authMW(tH.ConfirmScan))
+	mux.HandleFunc("POST "+prefix+"transactions/split", authMW(tH.AssignSplitBill))
 	mux.HandleFunc("GET "+prefix+"emails/pending", authMW(tH.GetPendingEmails))
 	mux.HandleFunc("POST "+prefix+"emails/{id}/approve", authMW(tH.ApproveEmail))
 	mux.HandleFunc("POST "+prefix+"emails/{id}/reject", authMW(tH.RejectEmail))

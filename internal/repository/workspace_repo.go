@@ -25,6 +25,7 @@ type WorkspaceRepository interface {
 	GetWorkspacesByOwner(ownerID uint) ([]models.Workspace, error)
 	GetByTelegramChatID(chatID int64) (*models.Workspace, error)
 	IsMember(workspaceID uint, userID uint) (bool, error)
+	GetMembersByWorkspaceID(workspaceID uint) ([]models.WorkspaceMember, error)
 	GetActiveTarget(workspaceID uint, period string) (*models.Target, error)
 	GetActiveTargets(workspaceID uint, period string) ([]models.Target, error)
 	UpsertTarget(target *models.Target) error
@@ -175,6 +176,13 @@ func (r *workspaceRepository) IsMember(workspaceID uint, userID uint) (bool, err
 		Count(&count).Error
 
 	return count > 0, err
+}
+
+func (r *workspaceRepository) GetMembersByWorkspaceID(workspaceID uint) ([]models.WorkspaceMember, error) {
+	var members []models.WorkspaceMember
+	// Preload("User") ini kuncinya biar dapet data detail usernya
+	err := r.db.Preload("User").Where("workspace_id = ?", workspaceID).Find(&members).Error
+	return members, err
 }
 
 func (r *workspaceRepository) GetActiveTarget(workspaceID uint, period string) (*models.Target, error) {

@@ -32,6 +32,7 @@ type TransactionRepository interface {
 	DeleteEmailParsed(id uint) error
 	GetSummaryByWorkspace(workspaceID uint, txType string, month string) ([]dto.UserTransactionSummary, error)
 	GetTotalByWorkspace(workspaceID uint, txType string, month string) (float64, error)
+	CreateWithItems(transaction *models.Transaction) error
 }
 
 type transactionRepository struct {
@@ -43,11 +44,16 @@ func NewTransactionRepository(db *gorm.DB) TransactionRepository {
 }
 
 func (r *transactionRepository) FindByID(tx *models.Transaction, id uint) error {
-	return r.db.First(tx, id).Error
+	// Kita suruh GORM: "Eh, pas ambil Transaksi, ambil sekalian rincian barangnya!"
+	return r.db.Preload("TransactionItems").First(tx, id).Error
 }
 
 func (r *transactionRepository) Create(transaction *models.Transaction) error {
 	return r.db.Create(transaction).Error
+}
+
+func (r *transactionRepository) CreateWithItems(transaction *models.Transaction) error {
+	return r.db.Session(&gorm.Session{FullSaveAssociations: true}).Create(transaction).Error
 }
 
 func (r *transactionRepository) IsDuplicate(workspaceID uint, amount float64, merchant string, date time.Time) (bool, error) {

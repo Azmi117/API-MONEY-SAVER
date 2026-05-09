@@ -32,6 +32,7 @@ func main() {
 	ocrClient := ocr.NewOCRSpaceClient(ocrKey)
 	pendingRepo := repository.NewPendingTransactionRepository(db)
 	targetRepo := repository.NewTargetRepository(db)
+	debtRepo := repository.NewDebtRepository(db)
 
 	// ---------------------------------------------------------
 	// 0. PKG LAYER (External Clients)
@@ -66,7 +67,7 @@ func main() {
 	tesseractClient := ocr.NewTesseractClient()
 	hybridScanner := ocr.NewHybridScanner(tesseractClient, geminiClient)
 
-	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient, pendingRepo, targetRepo)
+	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient, pendingRepo, targetRepo, debtRepo)
 	txHandler := delivery.NewTransactionHandler(txUsecase)
 
 	// ---------------------------------------------------------
