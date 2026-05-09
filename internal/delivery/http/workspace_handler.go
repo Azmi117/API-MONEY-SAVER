@@ -235,3 +235,23 @@ func (h *WorkspaceHandler) SetTarget(w http.ResponseWriter, r *http.Request) {
 		"message": "Target period " + req.Period + " berhasil diset!",
 	})
 }
+
+func (h *WorkspaceHandler) GetMembers(w http.ResponseWriter, r *http.Request) {
+	// Ambil ID dari path parameter {id} sesuai template mux lu
+	idStr := r.PathValue("id")
+	workspaceID, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		http.Error(w, "Invalid workspace ID", http.StatusBadRequest)
+		return
+	}
+
+	// Panggil usecase buat ambil daftar member
+	members, err := h.usecase.GetMembers(uint(workspaceID))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(members)
+}

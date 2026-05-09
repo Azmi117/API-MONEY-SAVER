@@ -26,6 +26,7 @@ type WorkspaceUsecase interface {
 	GetUserWorkspaceList(telegramUserID int64) (string, error)
 	SetTarget(req dto.SetTargetRequest) error
 	CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64) (*models.Workspace, error)
+	GetMembers(workspaceID uint) ([]models.WorkspaceMember, error)
 }
 
 type workspaceUsecase struct {
@@ -258,4 +259,8 @@ func (u *workspaceUsecase) CreateFromTelegram(ctx context.Context, telegramID in
 	}
 
 	return workspace, nil
+}
+
+func (u *workspaceUsecase) GetMembers(workspaceID uint) ([]models.WorkspaceMember, error) {
+	return u.workspaceRepo.GetMembersByWorkspaceID(workspaceID)
 }

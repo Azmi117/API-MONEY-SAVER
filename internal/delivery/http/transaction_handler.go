@@ -474,18 +474,28 @@ func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Ambil userID dari context (asumsi lu set di middleware auth lu)
 	userID, ok := r.Context().Value("user_id").(uint)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	// Parse tanggal dari string YYYY-MM-DD
 	parsedDate, err := time.Parse("2006-01-02", req.Date)
 	if err != nil {
 		http.Error(w, "Invalid date format, use YYYY-MM-DD", http.StatusBadRequest)
 		return
+	}
+
+	// --- STEP FIX: MANUAL MAPPING DTO -> MODEL ---
+	// Kita bikin slice baru dengan tipe models.TransactionItem
+	var modelItems []models.TransactionItem
+	for _, item := range req.Items {
+		modelItems = append(modelItems, models.TransactionItem{
+			Description: item.Description, // Mapping dari DTO (ItemName) ke Model (Description)
+			Price:       item.Price,
+			Quantity:    item.Quantity,
+			Total:       item.Price * float64(item.Quantity), // Hitung total per item
+		})
 	}
 
 	// Mapping ke model Transaction
@@ -498,13 +508,14 @@ func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request)
 		Type:             req.Type,
 		CategoryID:       req.CategoryID,
 		Note:             req.Note,
-		Status:           "approved", // Review selesai
+		Status:           "approved",
 		Source:           "ocr_space_pure",
-		TransactionItems: req.Items, // Pasangkan list items
+		GmailID:          fmt.Sprintf("SCAN-ALT-%d-%d", userID, time.Now().UnixNano()),
+		TransactionItems: modelItems, // Pake slice yang udah dikonversi
 	}
 
-	// Panggil usecase ConfirmScanTransaction yang udah lu buat tadi
-	err = h.usecase.ConfirmScanTransaction(r.Context(), transaction, req.Items)
+	// Panggil usecase - Pastikan parameter req.Items dikirim juga buat logic Split Bill
+	err = h.usecase.ConfirmScanTransaction(r.Context(), &transaction, transaction.TransactionItems)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -517,28 +528,27 @@ func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (h *TransactionHandler) ConfirmScanAlternative(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		PendingID uint `json:"pending_id"`
-	}
+func (h *TransactionHandler) AssignSplitBill(w http.ResponseWriter, r *http.Request) {
+	var req dto.SplitBillRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	// 1. Decode JSON dari Frontend (siapa makan apa)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Format JSON ngaco nih, Mi: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// TANGKAP 2 NILAI: notification dan err
-	notification, err := h.usecase.ConfirmPendingTransaction(r.Context(), request.PendingID)
+	// 2. Panggil UseCase sakti kita
+	err := h.usecase.AssignSplitBill(r.Context(), req.TransactionID, req.Items)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		// Di sini "Satpam Quantity" bakal teriak kalau ada yang iseng
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	// 3. Response Sukses
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"message":      "Transaction confirmed and saved successfully",
-		"notification": notification,
+		"message": "Split bill berhasil! Diva dkk otomatis dapet tagihan.",
 	})
 }
