@@ -7,6 +7,7 @@ import (
 
 type TargetRepository interface {
 	GetByWorkspaceAndPeriod(wsID uint, period string) (*models.Target, error)
+	Update(target *models.Target) error
 }
 
 type targetRepository struct {
@@ -25,4 +26,9 @@ func (r *targetRepository) GetByWorkspaceAndPeriod(wsID uint, period string) (*m
 		return nil, err
 	}
 	return &target, nil
+}
+
+func (r *targetRepository) Update(target *models.Target) error {
+	// Kita pake Save buat update semua field di model target
+	return r.db.Save(target).Error
 }
