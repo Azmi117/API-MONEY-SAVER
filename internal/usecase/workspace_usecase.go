@@ -25,7 +25,7 @@ type WorkspaceUsecase interface {
 	InitGroupConnection(telegramUserID int64, workspaceID uint, telegramChatID int64) error
 	GetUserWorkspaceList(telegramUserID int64) (string, error)
 	SetTarget(req dto.SetTargetRequest) error
-	CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64) (*models.Workspace, error)
+	CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64, wsType string) (*models.Workspace, error)
 	GetMembers(workspaceID uint) ([]models.WorkspaceMember, error)
 }
 
@@ -229,7 +229,7 @@ func (u *workspaceUsecase) SetTarget(req dto.SetTargetRequest) error {
 	return u.workspaceRepo.UpsertTarget(target)
 }
 
-func (u *workspaceUsecase) CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64) (*models.Workspace, error) {
+func (u *workspaceUsecase) CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64, wsType string) (*models.Workspace, error) {
 	// 1. Cari User berdasarkan Telegram ID
 	user, err := u.authRepo.GetByTelegramID(telegramID)
 	if err != nil {
@@ -252,6 +252,7 @@ func (u *workspaceUsecase) CreateFromTelegram(ctx context.Context, telegramID in
 		Name:           chatTitle,
 		OwnerID:        user.ID,
 		TelegramChatID: &chatID, // Pastikan field ini ada di model Workspace lu
+		Type:           wsType,
 	}
 
 	if err := u.workspaceRepo.Create(workspace); err != nil {

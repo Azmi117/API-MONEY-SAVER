@@ -43,6 +43,7 @@ type TransactionUsecase interface {
 	ConfirmEmailTransaction(ctx context.Context, userID uint, req dto.ConfirmEmailRequest) (string, error)
 	ProcessTelegramInput(ctx context.Context, msg string) (string, bool, float64)
 	AssignSplitBill(ctx context.Context, transactionID uint, items []dto.SplitItemRequest) error
+	CreatePendingSplit(ctx context.Context, userID uint, workspaceID uint, imagePath string) (uint, error)
 }
 
 type transactionUsecase struct {
@@ -116,6 +117,20 @@ func (u *transactionUsecase) CreateManual(ctx context.Context, userID uint, req 
 	// 5. Simpan transaksi ke database utama
 	if err := u.repo.Create(tx); err != nil {
 		return "", apperror.Internal("Failed to save manual transaction!")
+	}
+
+	// --- LOGIC THE GUARDIAN: UPDATE PROGRESS SAVING ---
+	// Jika tipe transaksi adalah income, kita update progres target di workspace ini
+	if tx.Type == "income" {
+		month := time.Now().Format("2006-01")
+		target, err := u.targetRepo.GetByWorkspaceAndPeriod(tx.WorkspaceID, month)
+
+		if err == nil && target != nil {
+			// Tambahkan nominal income ke current_amount target
+			target.CurrentAmount += tx.Amount
+			// Update data target di database
+			u.targetRepo.Update(target)
+		}
 	}
 
 	// 6. LOGIC THE GUARDIAN: Hitung akumulasi budget bulanan setelah transaksi disimpan
@@ -652,7 +667,6 @@ func (u *transactionUsecase) ConfirmPendingTransaction(ctx context.Context, pend
 	txData.Status = "approved"
 
 	// 4. Pindahkan data ke tabel transaksi permanen
-	// Method ini biasanya mengurusi penyimpanan Transaction dan TransactionItems sekaligus
 	err = u.ConfirmScanTransaction(ctx, &txData, txData.TransactionItems)
 	if err != nil {
 		return "", err
@@ -663,16 +677,24 @@ func (u *transactionUsecase) ConfirmPendingTransaction(ctx context.Context, pend
 		return "", err
 	}
 
+	// --- LOGIC THE GUARDIAN: UPDATE PROGRESS SAVING ---
+	if txData.Type == "income" {
+		month := time.Now().Format("2006-01")
+		target, err := u.targetRepo.GetByWorkspaceAndPeriod(txData.WorkspaceID, month)
+
+		if err == nil && target != nil {
+			target.CurrentAmount += txData.Amount
+			u.targetRepo.Update(target)
+		}
+	}
+
 	// 6. LOGIC THE GUARDIAN: Cek apakah transaksi ini menyentuh limit atau target tabungan
-	// Kita panggil method pengecekan target yang sudah dibuat sebelumnya
 	notification, err := u.CheckWorkspaceTarget(txData.WorkspaceID)
 	if err != nil {
-		// Kita log error-nya tapi tetap return sukses karena transaksi utama sudah berhasil disimpan
 		log.Printf("Target Check Error: %v", err)
 		return "Transaksi berhasil dikonfirmasi!", nil
 	}
 
-	// Jika ada notifikasi (limit jebol atau progres tabungan), kirimkan pesannya
 	if notification != "" {
 		return fmt.Sprintf("Transaksi Berhasil! \n\n%s", notification), nil
 	}
@@ -862,7 +884,6 @@ func (u *transactionUsecase) CheckWorkspaceTarget(workspaceID uint) (string, err
 
 	// 2. Ambil Total Global (Expense & Savings)
 	totalExpense, _ := u.repo.GetTotalByWorkspace(workspaceID, "expense", month)
-	totalSavings, _ := u.repo.GetTotalByWorkspace(workspaceID, "savings", month)
 
 	// 3. Ambil Rincian Per Member
 	expenseSummaries, _ := u.repo.GetSummaryByWorkspace(workspaceID, "expense", month)
@@ -886,7 +907,7 @@ func (u *transactionUsecase) CheckWorkspaceTarget(workspaceID uint) (string, err
 
 	// Bagian Savings
 	res += "💰 *Progres Tabungan (Savings):*\n"
-	res += fmt.Sprintf("📈 Rp%.2f / Rp%.2f\n\n", totalSavings, target.SavingsTarget)
+	res += fmt.Sprintf("📈 Rp%.2f / Rp%.2f\n\n", target.CurrentAmount, target.SavingsTarget)
 
 	if len(savingsSummaries) > 0 {
 		res += "👤 *Rincian Nabung:*\n"
@@ -1046,4 +1067,24 @@ func (u *transactionUsecase) AssignSplitBill(ctx context.Context, transactionID 
 	}
 
 	return nil
+}
+
+func (u *transactionUsecase) CreatePendingSplit(ctx context.Context, userID uint, workspaceID uint, imagePath string) (uint, error) {
+	pendingTx := &models.PendingTransaction{
+		UserID:      userID,
+		WorkspaceID: workspaceID,
+		ImagePath:   imagePath,
+		Status:      "pending",
+		Source:      "telegram_split",
+		// Tambahin ini Mi, biar Postgres gak protes soal syntax JSON
+		RawData:    "{}",
+		RawOCRData: "{}",
+	}
+
+	err := u.pendingRepo.Create(pendingTx)
+	if err != nil {
+		return 0, err
+	}
+
+	return pendingTx.ID, nil
 }

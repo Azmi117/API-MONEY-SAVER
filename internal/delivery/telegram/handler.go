@@ -46,6 +46,7 @@ func (h *TelegramHandler) Listen() {
 	updates := h.bot.GetUpdatesChan(u)
 
 	for update := range updates {
+		// --- 1. HANDLE CALLBACK (BUTTON CLICKS) ---
 		if update.CallbackQuery != nil {
 			h.handleCallback(update.CallbackQuery)
 			continue
@@ -55,19 +56,18 @@ func (h *TelegramHandler) Listen() {
 			continue
 		}
 
-		// Greeting Member Baru (Tetap sama)
+		// --- 2. GREETING MEMBER BARU ---
 		if update.Message.NewChatMembers != nil {
-			// ... (kode greeting lu)
+			// (Kode greeting lu tetep di sini)
 			continue
 		}
 
-		// --- UPDATE: HANDLE COMMANDS ---
-		// Di dalam func (h *TelegramHandler) Listen()
+		// --- 3. HANDLE COMMANDS ---
 		if update.Message.IsCommand() {
 			switch update.Message.Command() {
 			case "bind", "help", "list_workspace", "start":
 				h.handlePrivateCommands(update.Message)
-			case "init", "info", "cek_utang", "bayar": // <-- Tambahkan di sini
+			case "init", "info", "cek_utang", "bayar":
 				h.handleGroupCommands(update.Message)
 			case "status":
 				h.handleStatus(update.Message)
@@ -75,7 +75,7 @@ func (h *TelegramHandler) Listen() {
 			continue
 		}
 
-		// Handle Content
+		// --- 4. HANDLE CONTENT (TEXT/IMAGE) ---
 		if update.Message.Chat.IsPrivate() {
 			h.handlePrivateContent(update.Message)
 		} else {
@@ -103,11 +103,8 @@ func (h *TelegramHandler) handlePrivateCommands(m *tgbotapi.Message) {
 		msg := tgbotapi.NewMessage(m.Chat.ID, list)
 		msg.ParseMode = "Markdown"
 		h.bot.Send(msg)
-	case "help":
-		helpMsg := "🛠 **Nesav Admin Center**\n\n/bind [kode] - Hubungkan akun Web\n/list_workspace - Daftar Workspace lu\n/status - Summary Global"
-		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, helpMsg))
-	case "start":
-		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "Halo Mi! Bind akun lu dulu pake /bind [kode] yang ada di Web ya."))
+	case "help", "start": // Kita satuin ke handleHelp
+		h.handleHelp(m)
 	}
 }
 
@@ -125,73 +122,138 @@ func (h *TelegramHandler) handlePrivateContent(m *tgbotapi.Message) {
 }
 
 // --- GROUP CHAT HANDLERS ---
-// --- GROUP CHAT HANDLERS ---
 func (h *TelegramHandler) handleGroupCommands(m *tgbotapi.Message) {
 	if m.Chat.IsPrivate() {
+		return
+	}
+
+	ws, err := h.wsRepo.GetByTelegramChatID(m.Chat.ID)
+
+	if (err != nil || ws == nil) && m.Command() != "init" {
+		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Grup ini belum di-init. Ketik `/init` Mi!"))
 		return
 	}
 
 	switch m.Command() {
 	case "init":
 		h.handleInitGroup(m)
+	case "help":
+		h.handleHelp(m)
 	case "info":
-		ws, err := h.wsRepo.GetByTelegramChatID(m.Chat.ID)
-		if err != nil || ws == nil {
-			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Grup ini belum terhubung ke workspace."))
-			return
-		}
-		res := fmt.Sprintf("📂 **Info Grup**\n📌 **Workspace:** %s\n🆔 **ID:** `%d`", ws.Name, ws.ID)
-		msg := tgbotapi.NewMessage(m.Chat.ID, res)
-		msg.ParseMode = "Markdown"
-		h.bot.Send(msg)
-
-	// --- LOGIC: CEK UTANG (TRANSPARAN) ---
+		h.handleInfo(m)
 	case "cek_utang":
-		ws, _ := h.wsRepo.GetByTelegramChatID(m.Chat.ID)
-		if ws == nil {
-			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Grup belum di-init Mi!"))
+		if ws.Type != "split" {
+			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "🍕 Fitur ini cuma buat grup **Split Bill**!"))
 			return
 		}
-
-		debts, err := h.debtUsecase.GetWorkspaceDebts(context.Background(), ws.ID)
-		if err != nil || len(debts) == 0 {
-			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "✅ **Gak ada utang di workspace ini, Mi! Bersih.**"))
-			return
-		}
-
-		res := "📌 **DAFTAR TAGIHAN BELUM LUNAS**\n"
-		res += "--------------------------------------\n"
-		for _, d := range debts {
-			// FIX: d.FromUser.Username diganti d.FromUser.Name
-			res += fmt.Sprintf("👤 *@%s*\n💰 Rp%.0f (%s)\n🔑 `/bayar %s` \n\n",
-				d.FromUser.Name, d.Amount, d.Note, d.ShortCode)
-		}
-		res += "--------------------------------------\n_Klik kodenya buat copy otomatis!_"
-
-		msg := tgbotapi.NewMessage(m.Chat.ID, res)
-		msg.ParseMode = "Markdown"
-		h.bot.Send(msg)
-
-	// --- LOGIC: BAYAR (MANUAL INTENTIONAL) ---
+		h.processCekUtang(m, ws.ID) // Pindah ke bawah
 	case "bayar":
-		shortCode := strings.ToUpper(strings.TrimSpace(m.CommandArguments()))
-		if shortCode == "" {
-			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "⚠️ Contoh: `/bayar AB12`"))
+		if ws.Type != "split" {
+			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "🍕 Fitur ini cuma buat grup **Split Bill**!"))
 			return
 		}
-
-		ws, _ := h.wsRepo.GetByTelegramChatID(m.Chat.ID)
-		err := h.debtUsecase.ConfirmPayment(context.Background(), ws.ID, shortCode, int64(m.From.ID))
-		if err != nil {
-			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal: "+err.Error()))
-			return
-		}
-
-		msg := fmt.Sprintf("✅ **LUNAS!**\nKode `%s` udah ditandai lunas ya. Makasih!", shortCode)
-		res := tgbotapi.NewMessage(m.Chat.ID, msg)
-		res.ParseMode = "Markdown"
-		h.bot.Send(res)
+		h.processBayar(m, ws.ID) // Pindah ke bawah
 	}
+}
+
+func (h *TelegramHandler) processCekUtang(m *tgbotapi.Message, wsID uint) {
+	debts, err := h.debtUsecase.GetWorkspaceDebts(context.Background(), wsID)
+	if err != nil || len(debts) == 0 {
+		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "✅ **Gak ada utang di workspace ini, Mi! Bersih.**"))
+		return
+	}
+
+	res := "📌 **DAFTAR TAGIHAN BELUM LUNAS**\n"
+	res += "--------------------------------------\n"
+	for _, d := range debts {
+		res += fmt.Sprintf("👤 *@%s*\n💰 Rp%.0f (%s)\n🔑 `/bayar %s` \n\n",
+			d.FromUser.Name, d.Amount, d.Note, d.ShortCode)
+	}
+	res += "--------------------------------------\n_Klik kodenya buat copy otomatis!_"
+
+	msg := tgbotapi.NewMessage(m.Chat.ID, res)
+	msg.ParseMode = "Markdown"
+	h.bot.Send(msg)
+}
+
+func (h *TelegramHandler) processBayar(m *tgbotapi.Message, wsID uint) {
+	shortCode := strings.ToUpper(strings.TrimSpace(m.CommandArguments()))
+	if shortCode == "" {
+		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "⚠️ Contoh: `/bayar AB12`"))
+		return
+	}
+
+	err := h.debtUsecase.ConfirmPayment(context.Background(), wsID, shortCode, int64(m.From.ID))
+	if err != nil {
+		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal: "+err.Error()))
+		return
+	}
+
+	msg := fmt.Sprintf("✅ **LUNAS!**\nKode `%s` udah ditandai lunas ya. Makasih!", shortCode)
+	res := tgbotapi.NewMessage(m.Chat.ID, msg)
+	res.ParseMode = "Markdown"
+	h.bot.Send(res)
+}
+
+func (h *TelegramHandler) handleSplitPhotoUpload(m *tgbotapi.Message) {
+	// 1. Ambil file ID foto (ambil yang ukurannya paling gede/terakhir)
+	fileID := m.Photo[len(m.Photo)-1].FileID
+	fileURL, err := h.bot.GetFileDirectURL(fileID)
+	if err != nil {
+		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal dapet link foto dari Telegram."))
+		return
+	}
+
+	// 2. Download dan Simpan ke folder uploads
+	fileName := fmt.Sprintf("split_%d_%s.jpg", m.Chat.ID, time.Now().Format("20060102150405"))
+	localPath := "uploads/" + fileName
+
+	err = downloadFile(fileURL, localPath)
+	if err != nil {
+		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal simpan foto ke server."))
+		return
+	}
+
+	// 3. Simpan data awal ke tabel pending_transactions
+	// Kita pake UseCase buat nyimpen data "Draft" ini
+	ws, _ := h.wsRepo.GetByTelegramChatID(m.Chat.ID)
+	user, _ := h.authRepo.GetByTelegramID(int64(m.From.ID))
+
+	// Kita buat record pending dulu biar dapet ID buat jembatan link
+	pendingID, err := h.txUsecase.CreatePendingSplit(context.Background(), user.ID, ws.ID, localPath)
+	if err != nil {
+		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal buat draft transaksi: "+err.Error()))
+		return
+	}
+
+	// 4. Kirim Jembatan Link sakti ke Web Nesav
+	// Pakai domain asli atau localhost buat testing
+	baseURL := "https://web.nesav.com/split-bill"
+	targetURL := fmt.Sprintf("%s/%d", baseURL, pendingID)
+
+	resMsg := fmt.Sprintf("📸 **Struk Terdeteksi (Split Master)!**\n\nStruk lu udah aman di server, Mi. Karena ini grup Split Bill, bagi-bagi itemnya langsung di Web aja ya biar presisi.\n\n🔗 [Klik di sini buat bagi-bagi item](%s)", targetURL)
+
+	msg := tgbotapi.NewMessage(m.Chat.ID, resMsg)
+	msg.ParseMode = "Markdown"
+	h.bot.Send(msg)
+}
+
+// Helper function buat download (taro di paling bawah file handler.go)
+func downloadFile(url string, filepath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	out, err := os.Create(filepath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	return err
 }
 
 func (h *TelegramHandler) handleGroupContent(m *tgbotapi.Message) {
@@ -206,10 +268,29 @@ func (h *TelegramHandler) handleGroupContent(m *tgbotapi.Message) {
 		return
 	}
 
-	if m.Photo != nil {
-		h.handlePhoto(m)
-	} else if m.Text != "" {
-		h.handleTextTransaction(m)
+	// --- LOGIC: Tipe Workspace Budgeting ---
+	if ws.Type == "budgeting" {
+		if m.Photo != nil {
+			h.handlePhoto(m) // OCR langsung jadi pengeluaran
+		} else if m.Text != "" {
+			h.handleTextTransaction(m) // "Kopi 15000"
+		}
+		return
+	}
+
+	// --- LOGIC: Tipe Workspace Split ---
+	if ws.Type == "split" {
+		if m.Photo != nil {
+			// Kita bakal buat method baru ini di Step selanjutnya!
+			h.handleSplitPhotoUpload(m)
+		} else if m.Text != "" {
+			// Jika teks biasa di grup split, kita cuekin biar grup gak berisik
+			// Kecuali lu mau bot tetep respon kalau formatnya transaksi
+			_, _, ok := ParseChatToTransaction(m.Text)
+			if ok {
+				h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "🍕 Mi, ini grup Split Bill. Kalau mau nyatet pengeluaran pribadi di grup Budgeting ya!"))
+			}
+		}
 	}
 }
 
@@ -239,19 +320,30 @@ func (h *TelegramHandler) handleStatus(m *tgbotapi.Message) {
 
 func (h *TelegramHandler) handleInitGroup(m *tgbotapi.Message) {
 	args := m.CommandArguments()
+
+	// Skenario 1: /init tanpa argumen (Manual lewat Button)
 	if strings.TrimSpace(args) == "" {
-		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "⏳ Lagi buatin Workspace otomatis..."))
-		ws, err := h.wsUsecase.CreateFromTelegram(context.Background(), int64(m.From.ID), m.Chat.Title, m.Chat.ID)
-		if err != nil {
-			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal: "+err.Error()))
-			return
-		}
-		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("🎉 **Workspace Aktif!**\nNama: %s\nID: %d", ws.Name, ws.ID)))
+		keyboard := tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("🛡️ Budgeting", "init_ws:budgeting"),
+				tgbotapi.NewInlineKeyboardButtonData("🍕 Split Bill", "init_ws:split"),
+			),
+		)
+
+		msg := tgbotapi.NewMessage(m.Chat.ID, "Halo Mi! Pilih tipe workspace buat grup ini:")
+		msg.ReplyMarkup = keyboard
+		h.bot.Send(msg)
 		return
 	}
 
-	wsID, _ := strconv.Atoi(strings.TrimSpace(args))
-	err := h.wsUsecase.InitGroupConnection(int64(m.From.ID), uint(wsID), m.Chat.ID)
+	// Skenario 2: /init [ID] (Link workspace yang udah ada di Web)
+	wsID, err := strconv.Atoi(strings.TrimSpace(args))
+	if err != nil {
+		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "⚠️ Format salah. Contoh: `/init 123`"))
+		return
+	}
+
+	err = h.wsUsecase.InitGroupConnection(int64(m.From.ID), uint(wsID), m.Chat.ID)
 	if err != nil {
 		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal Sinkron: "+err.Error()))
 		return
@@ -352,14 +444,40 @@ func (h *TelegramHandler) handleCallback(query *tgbotapi.CallbackQuery) {
 	chatID := query.Message.Chat.ID
 	messageID := query.Message.MessageID
 
-	user, err := h.authRepo.GetByTelegramID(query.From.ID)
+	// Biar loading di tombol Telegram ilang setelah diklik
+	h.bot.Request(tgbotapi.NewCallback(query.ID, ""))
+
+	// --- 0. LOGIC INISIALISASI WORKSPACE (NEW) ---
+	if strings.HasPrefix(data, "init_ws:") {
+		wsType := strings.Split(data, ":")[1]
+
+		// Panggil UseCase dengan parameter wsType yang baru
+		ws, err := h.wsUsecase.CreateFromTelegram(
+			context.Background(),
+			int64(query.From.ID),
+			query.Message.Chat.Title,
+			query.Message.Chat.ID,
+			wsType,
+		)
+
+		if err != nil {
+			h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Gagal: "+err.Error()))
+			return
+		}
+
+		resText := fmt.Sprintf("🎉 **Workspace Aktif!**\nNama: %s\nTipe: %s", ws.Name, wsType)
+		edit := tgbotapi.NewEditMessageText(chatID, messageID, resText)
+		edit.ParseMode = "Markdown"
+		h.bot.Request(edit)
+		return
+	}
+
+	// Auth Check buat fitur lainnya
+	user, err := h.authRepo.GetByTelegramID(int64(query.From.ID))
 	if err != nil {
 		h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Akun belum terhubung!"))
 		return
 	}
-
-	// Biar loading di tombol Telegram ilang setelah diklik
-	h.bot.Request(tgbotapi.NewCallback(query.ID, ""))
 
 	// --- 1. LOGIC SCAN STRUK (HYBRID/OCR) ---
 	if strings.HasPrefix(data, "select_alt:") || strings.HasPrefix(data, "select_hybrid:") {
@@ -422,7 +540,6 @@ func (h *TelegramHandler) handleCallback(query *tgbotapi.CallbackQuery) {
 
 	// --- 2. LOGIC HYBRID TEXT (INCOME/EXPENSE BUTTON) ---
 	if strings.HasPrefix(data, "set_type:") {
-		// Format: set_type:income:50000
 		parts := strings.Split(data, ":")
 		if len(parts) < 3 {
 			return
@@ -447,12 +564,9 @@ func (h *TelegramHandler) handleCallback(query *tgbotapi.CallbackQuery) {
 		if err != nil {
 			h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Gagal simpan: "+err.Error()))
 		} else {
-			// Edit pesan lama biar tombolnya ilang
 			edit := tgbotapi.NewEditMessageText(chatID, messageID, fmt.Sprintf("✅ **Tersimpan sebagai %s!**", txType))
 			edit.ParseMode = "Markdown"
 			h.bot.Request(edit)
-
-			// Kirim update sisa jajan (The Guardian)
 			h.bot.Send(tgbotapi.NewMessage(chatID, notification))
 		}
 		return
@@ -482,4 +596,44 @@ func (h *TelegramHandler) handleCallback(query *tgbotapi.CallbackQuery) {
 		h.txUsecase.HardDeleteTransaction(uint(id))
 		h.bot.Request(tgbotapi.NewEditMessageText(chatID, messageID, "🗑️ **Dihapus.**"))
 	}
+}
+
+func (h *TelegramHandler) handleHelp(m *tgbotapi.Message) {
+	helpText := `📖 *Panduan Bot Nesav*
+
+*Grup Commands:*
+🛡️ /init - Setup grup (Pilih tipe Budgeting atau Split Bill)
+📊 /info - Detail Workspace & Status
+💸 /cek_utang - Cek tagihan patungan (Khusus Split Bill)
+💳 /bayar - Bayar tagihan (Khusus Split Bill)
+
+*Private Commands:*
+🔗 /bind [kode] - Hubungkan akun Web
+📋 /list_workspace - Daftar Workspace lu
+📈 /status - Summary Global keuangan lu
+
+*Tips:* - Di grup *Budgeting*, ketik "Kopi 15000" buat catat jajan.
+- Di grup *Split Bill*, upload foto struk buat bagi-bagi tagihan.`
+
+	msg := tgbotapi.NewMessage(m.Chat.ID, helpText)
+	msg.ParseMode = "Markdown"
+	h.bot.Send(msg)
+}
+
+func (h *TelegramHandler) handleInfo(m *tgbotapi.Message) {
+	ws, _ := h.wsRepo.GetByTelegramChatID(m.Chat.ID)
+
+	var detail string
+	if ws.Type == "split" {
+		debts, _ := h.debtUsecase.GetWorkspaceDebts(context.Background(), ws.ID)
+		detail = fmt.Sprintf("\n🍕 **Tipe:** Split Bill Master\n💰 **Tagihan Aktif:** %d item", len(debts))
+	} else {
+		// Nanti lu bisa panggil usecase budget di sini Mi
+		detail = "\n🛡️ **Tipe:** The Guardian (Budgeting)\n📊 **Status:** Monitoring Aktif"
+	}
+
+	res := fmt.Sprintf("📂 **Info Workspace**\n📌 **Nama:** %s\n🆔 **ID:** `%d` %s", ws.Name, ws.ID, detail)
+	msg := tgbotapi.NewMessage(m.Chat.ID, res)
+	msg.ParseMode = "Markdown"
+	h.bot.Send(msg)
 }
