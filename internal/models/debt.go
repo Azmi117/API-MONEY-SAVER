@@ -10,6 +10,7 @@ type Debt struct {
 	FromUserID  uint    `gorm:"not null" json:"from_user_id"` // Siapa yang berutang
 	ToUserID    uint    `gorm:"not null" json:"to_user_id"`   // Berutang ke siapa (Payer)
 	Amount      float64 `gorm:"type:decimal(15,2);not null" json:"amount"`
+	ShortCode   string  `gorm:"type:varchar(5);index" json:"short_code"`
 	Note        string  `gorm:"type:varchar(255)" json:"note"`
 	IsPaid      bool    `gorm:"default:false" json:"is_paid"`
 

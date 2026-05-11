@@ -32,4 +32,6 @@ type User struct {
 	RevokeTokens        []RevokeToken         `gorm:"foreignKey:UserID"`
 	SentInvitations     []WorkspaceInvitation `gorm:"foreignKey:InviterID"`
 	ReceivedInvitations []WorkspaceInvitation `gorm:"foreignKey:InvitedID"`
+	DebtsFrom           []Debt                `gorm:"foreignKey:FromUserID" json:"debts_from,omitempty"`
+	DebtsTo             []Debt                `gorm:"foreignKey:ToUserID" json:"debts_to,omitempty"`
 }

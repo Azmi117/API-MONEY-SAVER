@@ -33,6 +33,8 @@ func main() {
 	pendingRepo := repository.NewPendingTransactionRepository(db)
 	targetRepo := repository.NewTargetRepository(db)
 	debtRepo := repository.NewDebtRepository(db)
+	debtUsecase := usecase.NewDebtUsecase(debtRepo)
+	debtHandler := delivery.NewDebtHandler(debtUsecase)
 
 	// ---------------------------------------------------------
 	// 0. PKG LAYER (External Clients)
@@ -67,7 +69,7 @@ func main() {
 	tesseractClient := ocr.NewTesseractClient()
 	hybridScanner := ocr.NewHybridScanner(tesseractClient, geminiClient)
 
-	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient, pendingRepo, targetRepo, debtRepo)
+	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient, pendingRepo, targetRepo, debtRepo, debtUsecase)
 	txHandler := delivery.NewTransactionHandler(txUsecase)
 
 	// ---------------------------------------------------------
@@ -79,7 +81,7 @@ func main() {
 		log.Printf("⚠️ Gagal inisialisasi Telegram Bot: %v", err)
 	} else {
 		// Inisialisasi Handler Telegram
-		tgHandler := tgDelivery.NewTelegramHandler(bot, txUsecase, authUsecase, authRepo, wsUsecase, wsRepo, pendingRepo)
+		tgHandler := tgDelivery.NewTelegramHandler(bot, txUsecase, authUsecase, authRepo, wsUsecase, debtUsecase, wsRepo, pendingRepo)
 
 		// Jalankan Listener Telegram di Goroutine (Background)
 		go func() {
@@ -111,7 +113,7 @@ func main() {
 	// 6. SERVER CONFIG & ROUTES
 	// ---------------------------------------------------------
 	mux := http.NewServeMux()
-	delivery.MapRoutes(mux, authHandler, wsHandler, txHandler, authRepo, db)
+	delivery.MapRoutes(mux, authHandler, wsHandler, txHandler, debtHandler, authRepo, db)
 
 	port := ":8080"
 	log.Printf("🌍 Server running on port %s", port)

@@ -49,6 +49,7 @@ type transactionUsecase struct {
 	repo           repository.TransactionRepository
 	authRepo       repository.AuthRepository
 	debtRepo       repository.DebtRepository
+	debtUsecase    DebtUsecase
 	targetRepo     repository.TargetRepository
 	pendingRepo    repository.PendingTransactionRepository
 	googleService  service.GoogleAuthService
@@ -58,7 +59,7 @@ type transactionUsecase struct {
 	ocrSpaceClient *ocr.OCRSpaceClient
 }
 
-func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient, pendingRepo repository.PendingTransactionRepository, targetRepo repository.TargetRepository, debtRepo repository.DebtRepository) TransactionUsecase {
+func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient, pendingRepo repository.PendingTransactionRepository, targetRepo repository.TargetRepository, debtRepo repository.DebtRepository, debtUsecase DebtUsecase) TransactionUsecase {
 	return &transactionUsecase{
 		repo:           repo,
 		authRepo:       authRepo,
@@ -70,6 +71,7 @@ func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repos
 		pendingRepo:    pendingRepo,
 		targetRepo:     targetRepo,
 		debtRepo:       debtRepo,
+		debtUsecase:    debtUsecase,
 	}
 }
 
@@ -964,54 +966,78 @@ func (u *transactionUsecase) extractAmount(msg string) float64 {
 }
 
 func (u *transactionUsecase) AssignSplitBill(ctx context.Context, transactionID uint, items []dto.SplitItemRequest) error {
-	// 1. Ambil data asli dari DB (Acuan Satpam)
+	// 1. Ambil data asli dari DB (Sebagai acuan/polisi)
 	var originalTx models.Transaction
-	// Pake FindByID sesuai method di repo lu
 	if err := u.repo.FindByID(&originalTx, transactionID); err != nil {
 		return fmt.Errorf("transaksi dengan ID %d kagak ketemu, Mi", transactionID)
 	}
 
-	// 2. Map buat simpan quantity asli dari DB
-	// Pastiin TransactionItems udah ikut ke-load pas FindByID (Preload)
+	// Buat map quantity dari struk asli
 	originalQtyMap := make(map[string]int)
 	for _, actualItem := range originalTx.TransactionItems {
 		name := strings.TrimSpace(actualItem.Description)
 		originalQtyMap[name] = actualItem.Quantity
 	}
 
-	// 3. Validasi Quantity Input vs Data di DB
+	// --- LAYER VALIDASI: QUANTITY & TOTAL NOMINAL ---
+	var totalInputAmount float64
 	inputQtyMap := make(map[string]int)
 	userDebts := make(map[uint]float64)
 
 	for _, input := range items {
 		itemName := strings.TrimSpace(input.ItemName)
+
+		// 1. Akumulasi Quantity per item
 		inputQtyMap[itemName] += input.Quantity
 
+		// 2. Akumulasi Total Nominal Input (Logic Baru sesuai ide lu)
+		totalInputAmount += (input.Price * float64(input.Quantity))
+
+		// 3. Cek apakah item ada di struk
 		qtyInDB, exists := originalQtyMap[itemName]
 		if !exists {
 			return fmt.Errorf("item '%s' gak ada di struk asli", itemName)
 		}
 
+		// 4. Validasi Quantity (Satpam Quantity)
 		if inputQtyMap[itemName] > qtyInDB {
 			return fmt.Errorf("item '%s' kelebihan: di struk cuma %d, tapi lu tag total %d",
 				itemName, qtyInDB, inputQtyMap[itemName])
 		}
 
-		// 4. Hitung akumulasi utang
+		// 5. Kelompokkan nominal utang (skip kalau yang bayar diri sendiri)
 		if input.UserID != originalTx.UserID {
 			userDebts[input.UserID] += (input.Price * float64(input.Quantity))
 		}
 	}
 
-	// 5. Simpan ke tabel Debts (Logic manual tanpa saveDebts terpisah)
+	// --- FINAL LAYER: CEK TOTAL DUIT (Satpam Financial) ---
+	// Kita kasih toleransi 1 perak buat jaga-jaga pembulatan float64
+	if totalInputAmount > (originalTx.Amount + 1) {
+		return fmt.Errorf("total tagihan split (Rp%.2f) melebihi total struk asli (Rp%.2f)!",
+			totalInputAmount, originalTx.Amount)
+	}
+
+	// 6. Simpan ke tabel Debts secara batch
 	if len(userDebts) > 0 {
 		var debtsToSave []models.Debt
 		for targetUserID, totalAmount := range userDebts {
+
+			// --- TAMBAHKAN INI ---
+			// Panggil generator kode unik 4 karakter
+			shortCode, err := u.debtUsecase.GenerateUniqueShortCode(originalTx.WorkspaceID)
+			if err != nil {
+				// Fallback kalau amit-amit generatornya error
+				shortCode = "ERR1"
+			}
+			// ---------------------
+
 			debtsToSave = append(debtsToSave, models.Debt{
 				WorkspaceID: originalTx.WorkspaceID,
 				FromUserID:  targetUserID,
 				ToUserID:    originalTx.UserID,
 				Amount:      totalAmount,
+				ShortCode:   shortCode, // <-- MASUKIN KE SINI
 				Note:        "Split bill dari merchant: " + originalTx.Merchant,
 				IsPaid:      false,
 			})

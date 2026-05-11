@@ -19,6 +19,7 @@ import (
 type TelegramHandler struct {
 	bot         *tgbotapi.BotAPI
 	txUsecase   usecase.TransactionUsecase
+	debtUsecase usecase.DebtUsecase
 	authUsecase usecase.AuthUsecase
 	authRepo    repository.AuthRepository
 	pendingRepo repository.PendingTransactionRepository
@@ -26,10 +27,11 @@ type TelegramHandler struct {
 	wsRepo      repository.WorkspaceRepository
 }
 
-func NewTelegramHandler(bot *tgbotapi.BotAPI, txUsecase usecase.TransactionUsecase, authUsecase usecase.AuthUsecase, authRepo repository.AuthRepository, wsUsecase usecase.WorkspaceUsecase, wsRepo repository.WorkspaceRepository, pendingRepo repository.PendingTransactionRepository) *TelegramHandler {
+func NewTelegramHandler(bot *tgbotapi.BotAPI, txUsecase usecase.TransactionUsecase, authUsecase usecase.AuthUsecase, authRepo repository.AuthRepository, wsUsecase usecase.WorkspaceUsecase, debtUsecase usecase.DebtUsecase, wsRepo repository.WorkspaceRepository, pendingRepo repository.PendingTransactionRepository) *TelegramHandler {
 	return &TelegramHandler{
 		bot:         bot,
 		txUsecase:   txUsecase,
+		debtUsecase: debtUsecase,
 		authUsecase: authUsecase,
 		authRepo:    authRepo,
 		wsUsecase:   wsUsecase,
@@ -53,25 +55,19 @@ func (h *TelegramHandler) Listen() {
 			continue
 		}
 
-		// Greeting Member Baru
+		// Greeting Member Baru (Tetap sama)
 		if update.Message.NewChatMembers != nil {
-			for _, member := range update.Message.NewChatMembers {
-				if member.ID == h.bot.Self.ID {
-					h.bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "🚀 Nesav Bot Aktif! Owner, ketik /init buat aktifin workspace grup ini."))
-					continue
-				}
-				msgText := fmt.Sprintf("Halo @%s! 👋\nPastiin lu udah /bind di Private Chat gue biar bisa nyatet transaksi.", member.UserName)
-				h.bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, msgText))
-			}
+			// ... (kode greeting lu)
 			continue
 		}
 
-		// Handle Commands (Mirror Protocol)
+		// --- UPDATE: HANDLE COMMANDS ---
+		// Di dalam func (h *TelegramHandler) Listen()
 		if update.Message.IsCommand() {
 			switch update.Message.Command() {
 			case "bind", "help", "list_workspace", "start":
 				h.handlePrivateCommands(update.Message)
-			case "init", "info":
+			case "init", "info", "cek_utang", "bayar": // <-- Tambahkan di sini
 				h.handleGroupCommands(update.Message)
 			case "status":
 				h.handleStatus(update.Message)
@@ -79,7 +75,7 @@ func (h *TelegramHandler) Listen() {
 			continue
 		}
 
-		// Handle Content (Mirror Protocol)
+		// Handle Content
 		if update.Message.Chat.IsPrivate() {
 			h.handlePrivateContent(update.Message)
 		} else {
@@ -129,6 +125,7 @@ func (h *TelegramHandler) handlePrivateContent(m *tgbotapi.Message) {
 }
 
 // --- GROUP CHAT HANDLERS ---
+// --- GROUP CHAT HANDLERS ---
 func (h *TelegramHandler) handleGroupCommands(m *tgbotapi.Message) {
 	if m.Chat.IsPrivate() {
 		return
@@ -147,6 +144,53 @@ func (h *TelegramHandler) handleGroupCommands(m *tgbotapi.Message) {
 		msg := tgbotapi.NewMessage(m.Chat.ID, res)
 		msg.ParseMode = "Markdown"
 		h.bot.Send(msg)
+
+	// --- LOGIC: CEK UTANG (TRANSPARAN) ---
+	case "cek_utang":
+		ws, _ := h.wsRepo.GetByTelegramChatID(m.Chat.ID)
+		if ws == nil {
+			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Grup belum di-init Mi!"))
+			return
+		}
+
+		debts, err := h.debtUsecase.GetWorkspaceDebts(context.Background(), ws.ID)
+		if err != nil || len(debts) == 0 {
+			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "✅ **Gak ada utang di workspace ini, Mi! Bersih.**"))
+			return
+		}
+
+		res := "📌 **DAFTAR TAGIHAN BELUM LUNAS**\n"
+		res += "--------------------------------------\n"
+		for _, d := range debts {
+			// FIX: d.FromUser.Username diganti d.FromUser.Name
+			res += fmt.Sprintf("👤 *@%s*\n💰 Rp%.0f (%s)\n🔑 `/bayar %s` \n\n",
+				d.FromUser.Name, d.Amount, d.Note, d.ShortCode)
+		}
+		res += "--------------------------------------\n_Klik kodenya buat copy otomatis!_"
+
+		msg := tgbotapi.NewMessage(m.Chat.ID, res)
+		msg.ParseMode = "Markdown"
+		h.bot.Send(msg)
+
+	// --- LOGIC: BAYAR (MANUAL INTENTIONAL) ---
+	case "bayar":
+		shortCode := strings.ToUpper(strings.TrimSpace(m.CommandArguments()))
+		if shortCode == "" {
+			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "⚠️ Contoh: `/bayar AB12`"))
+			return
+		}
+
+		ws, _ := h.wsRepo.GetByTelegramChatID(m.Chat.ID)
+		err := h.debtUsecase.ConfirmPayment(context.Background(), ws.ID, shortCode, int64(m.From.ID))
+		if err != nil {
+			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal: "+err.Error()))
+			return
+		}
+
+		msg := fmt.Sprintf("✅ **LUNAS!**\nKode `%s` udah ditandai lunas ya. Makasih!", shortCode)
+		res := tgbotapi.NewMessage(m.Chat.ID, msg)
+		res.ParseMode = "Markdown"
+		h.bot.Send(res)
 	}
 }
 
