@@ -35,6 +35,8 @@ func main() {
 	debtRepo := repository.NewDebtRepository(db)
 	debtUsecase := usecase.NewDebtUsecase(debtRepo)
 	debtHandler := delivery.NewDebtHandler(debtUsecase)
+	categoryRepo := repository.NewCategoryRepository(db)
+	categoryHandler := delivery.NewCategoryHandler(categoryRepo)
 
 	// ---------------------------------------------------------
 	// 0. PKG LAYER (External Clients)
@@ -59,7 +61,7 @@ func main() {
 	// 2. WORKSPACE LAYER
 	// ---------------------------------------------------------
 	wsRepo := repository.NewWorkspaceRepository(db)
-	wsUsecase := usecase.NewWorkspaceUsecase(wsRepo, authRepo)
+	wsUsecase := usecase.NewWorkspaceUsecase(wsRepo, authRepo, categoryRepo)
 	wsHandler := delivery.NewWorkspaceHandler(wsUsecase)
 
 	// ---------------------------------------------------------
@@ -69,7 +71,7 @@ func main() {
 	tesseractClient := ocr.NewTesseractClient()
 	hybridScanner := ocr.NewHybridScanner(tesseractClient, geminiClient)
 
-	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient, pendingRepo, targetRepo, debtRepo, debtUsecase)
+	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient, pendingRepo, targetRepo, debtRepo, debtUsecase, categoryRepo)
 	txHandler := delivery.NewTransactionHandler(txUsecase)
 
 	// ---------------------------------------------------------
@@ -113,7 +115,7 @@ func main() {
 	// 6. SERVER CONFIG & ROUTES
 	// ---------------------------------------------------------
 	mux := http.NewServeMux()
-	delivery.MapRoutes(mux, authHandler, wsHandler, txHandler, debtHandler, authRepo, db)
+	delivery.MapRoutes(mux, authHandler, wsHandler, txHandler, debtHandler, categoryHandler, authRepo, db)
 
 	port := ":8080"
 	log.Printf("🌍 Server running on port %s", port)

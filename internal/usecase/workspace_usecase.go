@@ -32,10 +32,15 @@ type WorkspaceUsecase interface {
 type workspaceUsecase struct {
 	workspaceRepo repository.WorkspaceRepository
 	authRepo      repository.AuthRepository
+	categoryRepo  repository.CategoryRepository
 }
 
-func NewWorkspaceUsecase(wr repository.WorkspaceRepository, ar repository.AuthRepository) WorkspaceUsecase {
-	return &workspaceUsecase{workspaceRepo: wr, authRepo: ar}
+func NewWorkspaceUsecase(wr repository.WorkspaceRepository, ar repository.AuthRepository, cr repository.CategoryRepository) WorkspaceUsecase {
+	return &workspaceUsecase{
+		workspaceRepo: wr,
+		authRepo:      ar,
+		categoryRepo:  cr,
+	}
 }
 
 // 1. CREATE WORKSPACE
@@ -55,7 +60,24 @@ func (u *workspaceUsecase) CreateWorkspace(name string, ownerID uint) (*models.W
 	if err := u.workspaceRepo.Create(workspace); err != nil {
 		return nil, err
 	}
+	u.seedDefaultCategories(workspace.ID)
+
 	return workspace, nil
+}
+
+func (u *workspaceUsecase) seedDefaultCategories(wsID uint) {
+	defaults := []models.Category{
+		{Name: "Jajan", Type: "expense", Icon: "snack", WorkspaceID: wsID},
+		{Name: "Makan Berat", Type: "expense", Icon: "rice", WorkspaceID: wsID},
+		{Name: "Gaji", Type: "income", Icon: "money", WorkspaceID: wsID},
+		{Name: "Proyekan", Type: "income", Icon: "code", WorkspaceID: wsID},
+		{Name: "Self Reward", Type: "expense", Icon: "star", WorkspaceID: wsID}, // Tambahan biar gak hampa idup
+	}
+
+	for _, cat := range defaults {
+		// Kita abaikan error-nya biar gak ngerusak proses pembuatan workspace utama
+		_ = u.categoryRepo.Create(&cat)
+	}
 }
 
 // 2. MANAGEMENT FEATURES (Lengkap)

@@ -8,14 +8,14 @@ import (
 	"gorm.io/gorm"
 )
 
-func MapRoutes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, tH *TransactionHandler, dH *DebtHandler, aR repository.AuthRepository, db *gorm.DB) {
-	registerV1Routes(mux, aH, wH, tH, dH, aR, db)
+func MapRoutes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, tH *TransactionHandler, dH *DebtHandler, cH *CategoryHandler, aR repository.AuthRepository, db *gorm.DB) {
+	registerV1Routes(mux, aH, wH, tH, dH, cH, aR, db)
 
 	fs := http.FileServer(http.Dir("./uploads"))
 	mux.Handle("GET /uploads/", http.StripPrefix("/uploads", fs))
 }
 
-func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, tH *TransactionHandler, dH *DebtHandler, authRepo repository.AuthRepository, db *gorm.DB) {
+func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, tH *TransactionHandler, dH *DebtHandler, cH *CategoryHandler, authRepo repository.AuthRepository, db *gorm.DB) {
 	prefix := "/api/v1/"
 	authMW := middleware.Authenticate(authRepo)
 	ownerMW := middleware.AuthorizeWorkspaceOwner(db)
@@ -64,4 +64,10 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("POST "+prefix+"emails/{id}/reject", authMW(tH.RejectEmail))
 
 	mux.HandleFunc("GET "+prefix+"workspaces/{id}/debts", authMW(dH.GetWorkspaceDebts))
+
+	// --- CATEGORY ROUTES ---
+	// Create kategori baru di workspace tertentu
+	mux.HandleFunc("POST "+prefix+"workspaces/{id}/categories", authMW(ownerMW(cH.Create)))
+	// Get semua kategori milik workspace tersebut
+	mux.HandleFunc("GET "+prefix+"workspaces/{id}/categories", authMW(cH.GetByWorkspace))
 }

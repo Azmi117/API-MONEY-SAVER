@@ -58,9 +58,10 @@ type transactionUsecase struct {
 	hybridScanner  *ocr.HybridScanner
 	wsRepo         repository.WorkspaceRepository
 	ocrSpaceClient *ocr.OCRSpaceClient
+	categoryRepo   repository.CategoryRepository
 }
 
-func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient, pendingRepo repository.PendingTransactionRepository, targetRepo repository.TargetRepository, debtRepo repository.DebtRepository, debtUsecase DebtUsecase) TransactionUsecase {
+func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repository.AuthRepository, googleService service.GoogleAuthService, gemini *gemini.GeminiClient, hybridScanner *ocr.HybridScanner, wsRepo repository.WorkspaceRepository, ocrSpace *ocr.OCRSpaceClient, pendingRepo repository.PendingTransactionRepository, targetRepo repository.TargetRepository, debtRepo repository.DebtRepository, debtUsecase DebtUsecase, categoryRepo repository.CategoryRepository) TransactionUsecase {
 	return &transactionUsecase{
 		repo:           repo,
 		authRepo:       authRepo,
@@ -73,6 +74,7 @@ func NewTransactionUsecase(repo repository.TransactionRepository, authRepo repos
 		targetRepo:     targetRepo,
 		debtRepo:       debtRepo,
 		debtUsecase:    debtUsecase,
+		categoryRepo:   categoryRepo,
 	}
 }
 
@@ -87,6 +89,17 @@ func (u *transactionUsecase) CreateManual(ctx context.Context, userID uint, req 
 	}
 	if isDuplicate {
 		return "", apperror.Conflict("Similar transaction has already been recorded!")
+	}
+
+	var categoryID uint
+	if req.CategoryID != nil && *req.CategoryID != 0 {
+		// Kita ambil nilai asli dari pointer-nya
+		categoryID = *req.CategoryID
+
+		cat, err := u.categoryRepo.FindByID(categoryID)
+		if err != nil || cat == nil || cat.WorkspaceID != req.WorkspaceID {
+			return "", errors.New("kategori gak valid buat workspace ini, Mi")
+		}
 	}
 
 	// 3. Mapping data dari DTO Request ke Model Database
@@ -666,13 +679,22 @@ func (u *transactionUsecase) ConfirmPendingTransaction(ctx context.Context, pend
 	// 3. Set status transaksi menjadi "approved" agar masuk sebagai transaksi resmi
 	txData.Status = "approved"
 
+	// --- FIX LOGIC: VALIDASI KATEGORI (Pointer Handling) ---
+	// Cek apakah pointernya ada isinya (tidak nil) dan isinya bukan 0
+	if txData.CategoryID != nil && *txData.CategoryID != 0 {
+		cat, err := u.categoryRepo.FindByID(*txData.CategoryID)
+		if err != nil || cat == nil || cat.WorkspaceID != txData.WorkspaceID {
+			return "", errors.New("kategori yang dipilih gak valid buat workspace ini, Mi")
+		}
+	}
+
 	// 4. Pindahkan data ke tabel transaksi permanen
 	err = u.ConfirmScanTransaction(ctx, &txData, txData.TransactionItems)
 	if err != nil {
 		return "", err
 	}
 
-	// 5. Update status di tabel pending menjadi "approved" agar tidak diproses ulang
+	// 5. Update status di tabel pending menjadi "approved"
 	if err := u.pendingRepo.UpdateStatus(pendingID, "approved"); err != nil {
 		return "", err
 	}
@@ -688,7 +710,7 @@ func (u *transactionUsecase) ConfirmPendingTransaction(ctx context.Context, pend
 		}
 	}
 
-	// 6. LOGIC THE GUARDIAN: Cek apakah transaksi ini menyentuh limit atau target tabungan
+	// 6. LOGIC THE GUARDIAN: Check Target & Limit
 	notification, err := u.CheckWorkspaceTarget(txData.WorkspaceID)
 	if err != nil {
 		log.Printf("Target Check Error: %v", err)
