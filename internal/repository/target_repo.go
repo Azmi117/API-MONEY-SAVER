@@ -6,6 +6,9 @@ import (
 )
 
 type TargetRepository interface {
+	GetActiveTarget(workspaceID uint, period string) (*models.Target, error)
+	GetActiveTargets(workspaceID uint, period string) ([]models.Target, error)
+	UpsertTarget(target *models.Target) error
 	GetByWorkspaceAndPeriod(wsID uint, period string) (*models.Target, error)
 	Update(target *models.Target) error
 }
@@ -31,4 +34,26 @@ func (r *targetRepository) GetByWorkspaceAndPeriod(wsID uint, period string) (*m
 func (r *targetRepository) Update(target *models.Target) error {
 	// Kita pake Save buat update semua field di model target
 	return r.db.Save(target).Error
+}
+
+// 4. TARGETING SYSTEM
+func (r *targetRepository) GetActiveTarget(workspaceID uint, period string) (*models.Target, error) {
+	var target models.Target
+	err := r.db.Where("workspace_id = ? AND period = ? AND is_active = ?", workspaceID, period, true).First(&target).Error
+	if err != nil {
+		return nil, err
+	}
+	return &target, nil
+}
+
+func (r *targetRepository) UpsertTarget(target *models.Target) error {
+	return r.db.Where(models.Target{WorkspaceID: target.WorkspaceID, Period: target.Period}).
+		Assign(models.Target{AmountLimit: target.AmountLimit, SavingsTarget: target.SavingsTarget, IsActive: true}).
+		FirstOrCreate(target).Error
+}
+
+func (r *targetRepository) GetActiveTargets(workspaceID uint, period string) ([]models.Target, error) {
+	var targets []models.Target
+	err := r.db.Where("workspace_id = ? AND period = ?", workspaceID, period).Find(&targets).Error
+	return targets, err
 }

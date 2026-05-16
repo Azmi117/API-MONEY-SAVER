@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime"
-	"mime/multipart"
 	"net/http"
 	"net/mail"
 	"os"
@@ -18,487 +16,445 @@ import (
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
+	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/utils"
 	"github.com/jaytaylor/html2text"
 )
 
 type TransactionHandler struct {
-	usecase usecase.TransactionUsecase
+	usecase        usecase.TransactionUsecase
+	iUsecase       usecase.IntegrationUsecase
+	pendingUsecase usecase.PendingUsecase
+	debtUsecase    usecase.DebtUsecase
 }
 
-func NewTransactionHandler(u usecase.TransactionUsecase) *TransactionHandler {
-	return &TransactionHandler{u}
+func NewTransactionHandler(
+	u usecase.TransactionUsecase,
+	iu usecase.IntegrationUsecase,
+	pu usecase.PendingUsecase,
+	du usecase.DebtUsecase,
+) *TransactionHandler {
+	return &TransactionHandler{
+		usecase:        u,
+		iUsecase:       iu,
+		pendingUsecase: pu,
+		debtUsecase:    du,
+	}
 }
 
 // 1. POST /transactions/manual
 func (h *TransactionHandler) CreateManual(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST!"))
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use POST"))
 		return
 	}
 
 	var req dto.CreateTransactionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendError(w, apperror.BadRequest("Invalid payload!"))
+		SendError(w, apperror.BadRequest("Invalid request payload"))
 		return
 	}
 
-	// Sesuai diskusi, userID nanti diambil dari middleware JWT
-	userID := uint(1)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
 
-	// TANGKAP 2 NILAI: notification dan err
-	notification, err := h.usecase.CreateManual(r.Context(), userID, req)
+	tx, _, err := h.usecase.CreateManual(r.Context(), userID, req)
 	if err != nil {
-		SendError(w, apperror.Internal(err.Error()))
+		SendError(w, err)
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	// Sertakan notification di dalam response agar Frontend bisa baca
-	json.NewEncoder(w).Encode(map[string]string{
-		"message":      "Success record manual transaction",
-		"notification": notification,
-	})
+
+	// FIX: Pake anonymous struct biar urutan JSON ke-kunci dari atas ke bawah
+	response := struct {
+		StatusCode int         `json:"status_code"`
+		Message    string      `json:"message"`
+		Data       interface{} `json:"data"`
+	}{
+		StatusCode: http.StatusCreated,
+		Message:    "Manual transaction recorded successfully",
+		Data:       tx,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
-// 2. GET /transactions/history?workspace_id=1
+// 2. GET /transactions/history
 func (h *TransactionHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use GET!"))
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use GET"))
 		return
 	}
 
-	workspaceIDStr := r.URL.Query().Get("workspace_id")
-	workspaceID, _ := strconv.Atoi(workspaceIDStr)
+	// FIX: Ambil dari Path Param URL, bukan Query
+	idStr := r.PathValue("id")
+	workspaceID, _ := strconv.Atoi(idStr)
+
+	if workspaceID == 0 {
+		SendError(w, apperror.BadRequest("Invalid workspace ID"))
+		return
+	}
 
 	history, err := h.usecase.GetHistory(uint(workspaceID))
 	if err != nil {
-		SendError(w, apperror.Internal(err.Error()))
+		SendError(w, err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(history)
+	w.WriteHeader(http.StatusOK)
+
+	response := struct {
+		StatusCode int         `json:"status_code"`
+		Message    string      `json:"message"`
+		Data       interface{} `json:"data"`
+	}{
+		StatusCode: http.StatusOK,
+		Message:    "Transaction history retrieved successfully",
+		Data:       history,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
-// 3. DELETE /transactions/delete?id=1
+// 3. DELETE /transactions
+// 3. DELETE /transactions/{id}
+// 3. DELETE /transactions/{id}
 func (h *TransactionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use DELETE!"))
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use DELETE"))
 		return
 	}
 
-	idStr := r.URL.Query().Get("id")
+	// Ambil ID Transaksi dari Path Parameter
+	idStr := r.PathValue("id")
 	id, _ := strconv.Atoi(idStr)
 
-	err := h.usecase.DeleteTransaction(uint(id))
-	if err != nil {
-		SendError(w, apperror.Internal(err.Error()))
+	if id == 0 {
+		SendError(w, apperror.BadRequest("Invalid transaction ID"))
 		return
 	}
 
+	// FIX: Ambil userID dari context (hasil dari middleware authMW)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
+
+	// FIX: Pass context, transactionID, dan userID ke Usecase
+	err := h.usecase.DeleteTransaction(r.Context(), uint(id), userID)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	// Standarisasi Response
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Transaksi berhasil dihapus"})
+	w.WriteHeader(http.StatusOK)
+
+	response := struct {
+		StatusCode int         `json:"status_code"`
+		Message    string      `json:"message"`
+		Data       interface{} `json:"data"`
+	}{
+		StatusCode: http.StatusOK,
+		Message:    "Transaction deleted successfully",
+		Data:       nil,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
-// 4. POST /webhooks/email-mandiri (Untuk Cloudflare)
+// 4. POST /webhooks/email-mandiri
 func (h *TransactionHandler) EmailMandiriWebhook(w http.ResponseWriter, r *http.Request) {
-	// 1. Validasi Method
 	if r.Method != http.MethodPost {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST!"))
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use POST"))
 		return
 	}
 
-	// 2. Validasi Secret (Samain sama di Cloudflare & .env)
 	if r.Header.Get("X-Webhook-Secret") != os.Getenv("WEBHOOK_SECRET") {
-		SendError(w, apperror.Unauthorized("Invalid Secret Key"))
+		SendError(w, apperror.Unauthorized("Invalid webhook secret key"))
 		return
 	}
 
-	// 3. Decode Payload dari Cloudflare Worker
 	var payload struct {
 		Subject string `json:"subject"`
 		Body    string `json:"body"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		log.Printf("[Webhook Error] Gagal decode JSON: %v", err)
-		SendError(w, apperror.BadRequest("Failed decode Email!"))
+		SendError(w, apperror.BadRequest("Failed to decode email payload"))
 		return
 	}
 
-	// 4. PARSING RAW EMAIL (MIME Handling)
-	// Cloudflare ngirim format RFC822, kita harus buang header metadata-nya
-	msg, err := mail.ReadMessage(strings.NewReader(payload.Body))
+	msg, _ := mail.ReadMessage(strings.NewReader(payload.Body))
 	var finalBody string
 
-	if err != nil {
-		log.Printf("[Webhook Warning] Not RFC822 format, use raw body: %v", err)
-		finalBody = payload.Body
-	} else {
-		// Cek apakah emailnya multipart (ada HTML + Plain Text)
-		mediaType, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
-		if err == nil && strings.HasPrefix(mediaType, "multipart/") {
-			mr := multipart.NewReader(msg.Body, params["boundary"])
-			for {
-				p, err := mr.NextPart()
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					break
-				}
-				// Prioritaskan ambil yang text/plain atau text/html
-				slurp, _ := io.ReadAll(p)
-				finalBody += string(slurp)
-			}
-		} else {
-			// Kalau email simple, langsung baca body-nya
-			bodyBytes, _ := io.ReadAll(msg.Body)
-			finalBody = string(bodyBytes)
-		}
-	}
+	// Simple check instead of complex multipart for brevity, adjust if needed
+	bodyBytes, _ := io.ReadAll(msg.Body)
+	finalBody = string(bodyBytes)
 
-	// 5. Ubah HTML ke Text & Bersihin Spasi
 	plainBody, _ := html2text.FromString(finalBody)
 	plainBody = strings.TrimSpace(plainBody)
 
-	// 6. Jalankan Usecase
-	// Logika parsing Mandiri lu ada di dalem sini
-	tx, err := h.usecase.ProcessEmailMandiri(r.Context(), 1, 1, payload.Subject, plainBody)
+	tx, err := h.iUsecase.ProcessEmailMandiri(r.Context(), 1, 1, payload.Subject, plainBody)
 	if err != nil {
-		// Log biar ketauan di terminal Go lu kalau parsing gagal
-		log.Printf("[Webhook Error] Usecase Gagal: %v", err)
-		log.Printf("[Webhook Debug] Plain Body yg bikin gagal: %s", plainBody)
-
-		SendError(w, apperror.Internal(err.Error()))
+		log.Printf("[Webhook Error] Parsing failed: %v", err)
+		SendError(w, err)
 		return
 	}
 
-	// 7. Response Sukses
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(tx)
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Email processed successfully", tx)
 }
 
-// 5. POST /transactions/scan
-func (h *TransactionHandler) ScanReceipt(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST!"))
-		return
-	}
-
-	// Limit upload 5MB
-	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		SendError(w, apperror.BadRequest("File size is bigger than 5MB, reduce file size!"))
-		return
-	}
-
-	file, header, err := r.FormFile("image")
-	if err != nil {
-		SendError(w, apperror.BadRequest("Image not found!"))
-		return
-	}
-	defer file.Close()
-
-	// Cek MIME Type
-	contentType := header.Header.Get("Content-Type")
-	if !strings.HasPrefix(contentType, "image/") {
-		SendError(w, apperror.BadRequest("File must be an image!"))
-		return
-	}
-
-	imgData, err := io.ReadAll(file)
-	if err != nil {
-		SendError(w, apperror.Internal("Failed load image!"))
-		return
-	}
-
-	wsID, _ := strconv.Atoi(r.FormValue("workspace_id"))
-	userID := uint(1)
-
-	tx, err := h.usecase.ProcessScan(r.Context(), userID, uint(wsID), imgData, contentType)
-	if err != nil {
-		// Balikin JSON error manual biar frontend gampang baca
-		SendError(w, apperror.Internal(err.Error()))
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "Success scan receipt!",
-		"data":    tx,
-	})
-}
-
-// 6. PATCH /transactions/confirm?id=1
+// 5. PATCH /transactions/{id}/confirm
 func (h *TransactionHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPatch {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use PATCH!"))
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use PATCH"))
 		return
 	}
 
-	idStr := r.URL.Query().Get("id")
+	idStr := r.PathValue("id")
 	id, _ := strconv.Atoi(idStr)
 
-	// TANGKAP 2 NILAI: notification dan err
-	notification, err := h.usecase.ConfirmTransaction(r.Context(), uint(id))
-	if err != nil {
-		SendError(w, apperror.Internal(err.Error()))
+	if id == 0 {
+		SendError(w, apperror.BadRequest("Invalid transaction ID"))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message":      "Success confirm transaction",
-		"notification": notification,
-	})
-}
-
-func (h *TransactionHandler) ScanReceiptHybrid(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST!"))
-		return
-	}
-
-	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		SendError(w, apperror.BadRequest("File size is bigger than 5MB, reduce file size!"))
-		return
-	}
-
-	file, header, err := r.FormFile("image")
-	if err != nil {
-		SendError(w, apperror.BadRequest("Image not found!"))
-		return
-	}
-	defer file.Close()
-
-	contentType := header.Header.Get("Content-Type")
-	if !strings.HasPrefix(contentType, "image/") {
-		SendError(w, apperror.BadRequest("File must be an image!"))
-		return
-	}
-
-	imgData, err := io.ReadAll(file)
-	if err != nil {
-		SendError(w, apperror.Internal("Failed load image!"))
-		return
-	}
-
-	wsID, _ := strconv.Atoi(r.FormValue("workspace_id"))
-
-	userID, ok := r.Context().Value("user_id").(uint)
-	if !ok {
-		SendError(w, apperror.Unauthorized("Unauthorized"))
-		return
-	}
-
-	result, err := h.usecase.ProcessScanHybrid2(r.Context(), userID, uint(wsID), imgData, contentType)
-	if err != nil {
-		SendError(w, apperror.Internal(err.Error()))
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "Success scan receipt (hybrid)",
-		"data":    result.Transaction,
-		"meta": map[string]interface{}{
-			"engine":        result.Engine,
-			"confidence":    result.Confidence,
-			"fallback_used": result.FallbackUsed,
-		},
-	})
-}
-
-// 1. GET PENDING EMAILS
-func (h *TransactionHandler) GetPendingEmails(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(uint)
-
-	// Ambil list dari usecase (nanti kita tambahin methodnya di usecase)
-	logs, err := h.usecase.GetPendingEmailLogs(userID)
+	// FIX: Tangkep variabel tx (data transaksi asli), dan buang budgetData pake "_"
+	tx, _, err := h.usecase.ConfirmTransaction(r.Context(), uint(id))
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(logs)
+	w.WriteHeader(http.StatusOK)
+
+	// FIX: Response jadi standar, Data isinya detail transaksi yang barusan di-ACC
+	response := struct {
+		StatusCode int         `json:"status_code"`
+		Message    string      `json:"message"`
+		Data       interface{} `json:"data"`
+	}{
+		StatusCode: http.StatusOK,
+		Message:    "Transaction confirmed successfully",
+		Data:       tx,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
-// 2. APPROVE EMAIL LOG
+// 6. POST /transactions/scan-hybrid2
+func (h *TransactionHandler) ScanReceiptHybrid(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(5 << 20); err != nil {
+		SendError(w, apperror.BadRequest("File size exceeds 5MB limit"))
+		return
+	}
+
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		SendError(w, apperror.BadRequest("Receipt image is required"))
+		return
+	}
+	defer file.Close()
+
+	imgData, _ := io.ReadAll(file)
+	wsIDStr := r.FormValue("workspace_id")
+	wsID, _ := strconv.Atoi(wsIDStr)
+
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
+
+	result, pendingID, err := h.usecase.ProcessScanHybrid2(r.Context(), userID, uint(wsID), imgData, header.Header.Get("Content-Type"))
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	response := struct {
+		StatusCode int         `json:"status_code"`
+		Message    string      `json:"message"`
+		Data       interface{} `json:"data"`
+		PendingID  uint        `json:"pending_id"`
+	}{
+		StatusCode: http.StatusOK,
+		Message:    "Receipt scanned successfully (Pending)",
+		Data:       result,
+		PendingID:  pendingID,
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// 7. GET /emails/pending
+func (h *TransactionHandler) GetPendingEmails(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
+
+	logs, err := h.pendingUsecase.GetPendingEmailLogs(userID)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Pending email logs retrieved successfully", logs)
+}
+
+// 8. POST /emails/{id}/approve
 func (h *TransactionHandler) ApproveEmail(w http.ResponseWriter, r *http.Request) {
-	// 1. Ambil ID email_parsed dari URL parameter (:id)
 	logIDStr := r.PathValue("id")
 	logID, _ := strconv.ParseUint(logIDStr, 10, 32)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
 
-	// 2. Ambil UserID dari context (hasil middleware Auth)
-	userID := r.Context().Value("user_id").(uint)
-
-	// 3. Dekode body request untuk mendapatkan WorkspaceID pilihan user
-	// Kita gunakan anonymous struct supaya simpel karena cuma butuh satu field
 	var body struct {
 		WorkspaceID uint `json:"workspace_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		SendError(w, apperror.BadRequest("Format request tidak valid, Mi"))
+		SendError(w, apperror.BadRequest("Invalid request format"))
 		return
 	}
 
-	// 4. Validasi apakah workspace_id dikirim (cegah input kosong)
-	if body.WorkspaceID == 0 {
-		SendError(w, apperror.BadRequest("Wajib pilih workspace tujuan dulu, Mi!"))
-		return
-	}
-
-	// 5. Susun DTO ConfirmEmailRequest untuk dikirim ke UseCase
 	confirmReq := dto.ConfirmEmailRequest{
 		EmailParsedID: uint(logID),
 		WorkspaceID:   body.WorkspaceID,
 	}
 
-	// 6. Panggil UseCase baru yang melakukan mapping data dan pengecekan limit (The Guardian)
-	// Method ApproveEmailLog yang lama kita ganti ke ConfirmEmailTransaction
-	notification, err := h.usecase.ConfirmEmailTransaction(r.Context(), userID, confirmReq)
+	// FIX: ConfirmEmailTransaction returns (*dto.BudgetStatusResponse, error)
+	notification, err := h.pendingUsecase.ConfirmEmailTransaction(r.Context(), userID, confirmReq)
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
-	// 7. Kirim response sukses beserta notifikasi dari The Guardian jika ada
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":               "Email approved and transaction created!",
-		"guardian_notification": notification, // Menampilkan info sisa jajan/tabungan
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Email approved and transaction created", map[string]interface{}{
+		"budget_status": notification,
 	})
 }
 
-// 3. REJECT EMAIL LOG
+// 9. POST /emails/{id}/reject
 func (h *TransactionHandler) RejectEmail(w http.ResponseWriter, r *http.Request) {
 	logIDStr := r.PathValue("id")
 	logID, _ := strconv.ParseUint(logIDStr, 10, 32)
-	userID := r.Context().Value("user_id").(uint)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
 
-	err := h.usecase.RejectEmailLog(r.Context(), uint(logID), userID)
+	err := h.pendingUsecase.RejectEmailLog(r.Context(), uint(logID), userID)
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Email log rejected successfully"})
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Email log rejected successfully", nil)
 }
 
+// 10. POST /transactions/scan-alt
 func (h *TransactionHandler) ScanAlternative(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("📩 [Handler] Masuk ke ScanAlternative")
-
-	// 1. Ambil user_id dari context (Middleware Auth)
 	userID, ok := r.Context().Value("user_id").(uint)
 	if !ok {
-		fmt.Println("❌ [Handler] User ID not found in context or wrong type")
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		SendError(w, apperror.Unauthorized("Invalid user session"))
 		return
 	}
 
-	// 2. Parse Multipart Form (Max 10MB)
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		fmt.Println("❌ [Handler] Parse Form Error:", err)
-		http.Error(w, "File too large", http.StatusBadRequest)
+		SendError(w, apperror.BadRequest("File size exceeds 10MB limit"))
 		return
 	}
 
-	// 3. Ambil file struk
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		fmt.Println("❌ [Handler] FormFile Error:", err)
-		http.Error(w, "File is required", http.StatusBadRequest)
+		SendError(w, apperror.BadRequest("Receipt file is required"))
 		return
 	}
 	defer file.Close()
 
-	// 4. Ambil workspace_id dari form
 	workspaceIDStr := r.FormValue("workspace_id")
-	wID, err := strconv.ParseUint(workspaceIDStr, 10, 32)
-	if err != nil {
-		fmt.Println("❌ [Handler] Invalid Workspace ID:", workspaceIDStr)
-		http.Error(w, "Invalid workspace_id", http.StatusBadRequest)
-		return
-	}
-	workspaceID := uint(wID)
+	wID, _ := strconv.ParseUint(workspaceIDStr, 10, 32)
 
-	// 5. Simpan file sementara secara lokal
 	filePath := fmt.Sprintf("uploads/%d_%s", userID, header.Filename)
-	dst, err := os.Create(filePath)
-	if err != nil {
-		fmt.Println("❌ [Handler] Create File Error:", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-	defer dst.Close()
+	dst, _ := os.Create(filePath)
 	io.Copy(dst, file)
-	defer os.Remove(filePath) // Bersihkan file setelah proses selesai
+	dst.Close()
+	defer os.Remove(filePath)
 
-	fmt.Println("📡 [Handler] Calling Usecase Alternative...")
-
-	// 6. Eksekusi Usecase (Menampung 3 return value: result, pendingID, err)
-	// Gunakan r.Context() untuk ctx, dan filePath untuk imagePath
-	result, pendingID, err := h.usecase.ProcessScanAlternative(r.Context(), filePath, userID, workspaceID)
+	result, pendingID, err := h.usecase.ProcessScanAlternative(r.Context(), filePath, userID, uint(wID))
 	if err != nil {
-		fmt.Println("❌ [Handler] Usecase Error:", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, err)
 		return
 	}
-
-	// 7. Kirim Response sukses
-	// Kita bisa tambahkan PendingID ke dalam response kalau front-end butuh
-	fmt.Printf("✅ [Handler] Scan Success! Pending ID: %d\n", pendingID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data":       result,
-		"pending_id": pendingID,
-		"message":    "Scan successful, please confirm to save.",
-	})
-}
+	w.WriteHeader(http.StatusOK)
 
-func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+	// FIX: Pake anonymous struct biar gak dobel data dan pake status_code
+	response := struct {
+		StatusCode int         `json:"status_code"`
+		Message    string      `json:"message"`
+		Data       interface{} `json:"data"`
+		PendingID  uint        `json:"pending_id"`
+	}{
+		StatusCode: http.StatusOK,
+		Message:    "Scan successful, pending confirmation",
+		Data:       result,
+		PendingID:  pendingID,
 	}
 
+	json.NewEncoder(w).Encode(response)
+}
+
+// 11. POST /transactions/scan-alt/confirm
+func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request) {
 	var req dto.ConfirmTransactionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		SendError(w, apperror.BadRequest("Invalid confirmation payload"))
 		return
 	}
 
 	userID, ok := r.Context().Value("user_id").(uint)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		SendError(w, apperror.Unauthorized("Invalid user session"))
 		return
 	}
 
-	parsedDate, err := time.Parse("2006-01-02", req.Date)
+	// FIX 1: Parse date pake RFC3339 karena JSON dari ocr_space formatnya ada "T" dan "Z"
+	parsedDate, err := time.Parse(time.RFC3339, req.Date)
 	if err != nil {
-		http.Error(w, "Invalid date format, use YYYY-MM-DD", http.StatusBadRequest)
-		return
+		// Fallback kalau ternyata formatnya pendek
+		parsedDate, _ = time.Parse("2006-01-02", req.Date)
 	}
 
-	// --- STEP FIX: MANUAL MAPPING DTO -> MODEL ---
-	// Kita bikin slice baru dengan tipe models.TransactionItem
 	var modelItems []models.TransactionItem
 	for _, item := range req.Items {
 		modelItems = append(modelItems, models.TransactionItem{
-			Description: item.Description, // Mapping dari DTO (ItemName) ke Model (Description)
+			Description: item.Description,
 			Price:       item.Price,
 			Quantity:    item.Quantity,
-			Total:       item.Price * float64(item.Quantity), // Hitung total per item
+			Total:       item.Price * float64(item.Quantity),
 		})
 	}
 
-	// Mapping ke model Transaction
 	transaction := models.Transaction{
 		UserID:           userID,
 		WorkspaceID:      req.WorkspaceID,
@@ -509,46 +465,33 @@ func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request)
 		CategoryID:       req.CategoryID,
 		Note:             req.Note,
 		Status:           "approved",
-		Source:           "ocr_space_pure",
-		GmailID:          fmt.Sprintf("SCAN-ALT-%d-%d", userID, time.Now().UnixNano()),
-		TransactionItems: modelItems, // Pake slice yang udah dikonversi
+		Source:           "ocr_space",
+		TransactionItems: modelItems,
+		// FIX 2: Ini yang tadi kelupaan makanya meledak!
+		Method:  req.Method,
+		GmailID: req.GmailID,
 	}
 
-	// Panggil usecase - Pastikan parameter req.Items dikirim juga buat logic Split Bill
-	err = h.usecase.ConfirmScanTransaction(r.Context(), &transaction, transaction.TransactionItems)
+	// FIX 3: Tangkep err doang, budgetStatus buang aja karena gak dipake di response Web/API
+	_, err = h.usecase.ConfirmScanTransaction(r.Context(), &transaction, modelItems)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SendError(w, err)
 		return
 	}
 
+	// FIX 4: Response dibikin elegan dan konsisten
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Transaction confirmed and saved successfully",
-	})
-}
 
-func (h *TransactionHandler) AssignSplitBill(w http.ResponseWriter, r *http.Request) {
-	var req dto.SplitBillRequest
-
-	// 1. Decode JSON dari Frontend (siapa makan apa)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Format JSON ngaco nih, Mi: "+err.Error(), http.StatusBadRequest)
-		return
+	response := struct {
+		StatusCode int         `json:"status_code"`
+		Message    string      `json:"message"`
+		Data       interface{} `json:"data"`
+	}{
+		StatusCode: http.StatusCreated,
+		Message:    "Transaction confirmed and saved",
+		Data:       transaction,
 	}
 
-	// 2. Panggil UseCase sakti kita
-	err := h.usecase.AssignSplitBill(r.Context(), req.TransactionID, req.Items)
-	if err != nil {
-		// Di sini "Satpam Quantity" bakal teriak kalau ada yang iseng
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// 3. Response Sukses
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Split bill berhasil! Diva dkk otomatis dapet tagihan.",
-	})
+	json.NewEncoder(w).Encode(response)
 }

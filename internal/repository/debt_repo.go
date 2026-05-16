@@ -11,6 +11,8 @@ type DebtRepository interface {
 	IsShortCodeExists(workspaceID uint, code string) (bool, error)
 	GetDebtByShortCode(workspaceID uint, code string) (*models.Debt, error)
 	UpdateIsPaid(debtID uint, status bool) error
+	FindByID(id uint) (*models.Debt, error)
+	MarkAsPaid(id uint) error
 }
 
 type debtRepository struct {
@@ -51,4 +53,16 @@ func (r *debtRepository) GetDebtByShortCode(workspaceID uint, code string) (*mod
 
 func (r *debtRepository) UpdateIsPaid(debtID uint, status bool) error {
 	return r.db.Model(&models.Debt{}).Where("id = ?", debtID).Update("is_paid", status).Error
+}
+
+func (r *debtRepository) FindByID(id uint) (*models.Debt, error) {
+	var debt models.Debt
+	if err := r.db.First(&debt, id).Error; err != nil {
+		return nil, err
+	}
+	return &debt, nil
+}
+
+func (r *debtRepository) MarkAsPaid(id uint) error {
+	return r.db.Model(&models.Debt{}).Where("id = ?", id).Update("is_paid", true).Error
 }

@@ -12,7 +12,6 @@ import (
 
 type TransactionRepository interface {
 	Create(transaction *models.Transaction) error
-	// IsDuplicate bakal ngecek kombinasi Amount, Merchant, dan rentang waktu Date
 	IsDuplicate(workspaceID uint, amount float64, merchant string, date time.Time) (bool, error)
 	UpdateStatus(id uint, status string) error
 	GetByWorkspaceID(workspaceID uint) ([]models.Transaction, error)
@@ -44,7 +43,7 @@ func NewTransactionRepository(db *gorm.DB) TransactionRepository {
 }
 
 func (r *transactionRepository) FindByID(tx *models.Transaction, id uint) error {
-	// Kita suruh GORM: "Eh, pas ambil Transaksi, ambil sekalian rincian barangnya!"
+	// Eager load transaction items
 	return r.db.Preload("TransactionItems").First(tx, id).Error
 }
 
@@ -59,7 +58,7 @@ func (r *transactionRepository) CreateWithItems(transaction *models.Transaction)
 func (r *transactionRepository) IsDuplicate(workspaceID uint, amount float64, merchant string, date time.Time) (bool, error) {
 	var count int64
 
-	// Tentukan rentang waktu toleransi (5 menit sebelum & sesudah)
+	// 5-minute tolerance window
 	startTime := date.Add(-5 * time.Minute)
 	endTime := date.Add(5 * time.Minute)
 
@@ -83,14 +82,12 @@ func (r *transactionRepository) UpdateStatus(id uint, status string) error {
 
 func (r *transactionRepository) GetByWorkspaceID(workspaceID uint) ([]models.Transaction, error) {
 	var transactions []models.Transaction
-	// Kita urutin dari yang paling baru (Descending)
+	// Order by most recent
 	err := r.db.Where("workspace_id = ?", workspaceID).Order("date desc").Find(&transactions).Error
 	return transactions, err
 }
 
 func (r *transactionRepository) Delete(id uint) error {
-	// Kita pake Unscoped() kalau lu mau bener-bener hapus dari DB (Hard Delete)
-	// Kalau di model Transaction lu pake gorm.Model, dia otomatis Soft Delete
 	return r.db.Delete(&models.Transaction{}, id).Error
 }
 
@@ -104,12 +101,11 @@ func (r *transactionRepository) GetByGmailID(gmailID string) (*models.Transactio
 }
 
 func (r *transactionRepository) HardDelete(id uint) error {
-	// Unscoped() bikin perintah SQL jadi: DELETE FROM transactions WHERE id = ?
 	return r.db.Unscoped().Delete(&models.Transaction{}, id).Error
 }
 
 func (r *transactionRepository) CreateEmailLog(emailLog *models.EmailParsed) error {
-	// TAMBAHIN INI: Biar kalau GmailID duplikat, dia diem aja (DoNothing) gak bikin server error
+	// Prevent duplicate entries based on gmail_id
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "gmail_id"}},
 		DoNothing: true,
@@ -146,7 +142,6 @@ func (r *transactionRepository) GetPendingEmailLogs(userID uint) ([]models.Email
 
 func (r *transactionRepository) GetTotalAmountByType(workspaceID uint, txType string, period string) (float64, error) {
 	var total float64
-	// Menggunakan to_char untuk mencocokkan CreatedAt dengan format "YYYY-MM"
 	err := r.db.Model(&models.Transaction{}).
 		Where("workspace_id = ? AND type = ? AND to_char(created_at, 'YYYY-MM') = ?", workspaceID, txType, period).
 		Select("COALESCE(SUM(amount), 0)").
@@ -158,7 +153,6 @@ func (r *transactionRepository) GetTotalByMonth(workspaceID uint, period string)
 	var total float64
 	err := r.db.Model(&models.Transaction{}).
 		Select("COALESCE(SUM(amount), 0)").
-		// UBAH DISINI: Ganti DATE_FORMAT jadi to_char
 		Where("workspace_id = ? AND to_char(date, 'YYYY-MM') = ? AND type = ?", workspaceID, period, "expense").
 		Scan(&total).Error
 
@@ -169,7 +163,6 @@ func (r *transactionRepository) GetTotalSavings(workspaceID uint, period string)
 	var total float64
 	err := r.db.Model(&models.Transaction{}).
 		Select("COALESCE(SUM(amount), 0)").
-		// UBAH DISINI: Ganti DATE_FORMAT jadi to_char
 		Where("workspace_id = ? AND to_char(date, 'YYYY-MM') = ? AND type = ?", workspaceID, period, "savings").
 		Scan(&total).Error
 
@@ -178,7 +171,6 @@ func (r *transactionRepository) GetTotalSavings(workspaceID uint, period string)
 
 func (r *transactionRepository) GetEmailParsedByID(id uint) (*models.EmailParsed, error) {
 	var emailData models.EmailParsed
-	// Nyari data mentah berdasarkan ID yang dikirim dari cegatan Web
 	err := r.db.First(&emailData, id).Error
 	if err != nil {
 		return nil, err
@@ -187,7 +179,6 @@ func (r *transactionRepository) GetEmailParsedByID(id uint) (*models.EmailParsed
 }
 
 func (r *transactionRepository) DeleteEmailParsed(id uint) error {
-	// Hapus data dari table email_parsed supaya gak muncul lagi di list "Pending Approval"
 	return r.db.Delete(&models.EmailParsed{}, id).Error
 }
 

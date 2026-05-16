@@ -32,9 +32,6 @@ func main() {
 	ocrClient := ocr.NewOCRSpaceClient(ocrKey)
 	pendingRepo := repository.NewPendingTransactionRepository(db)
 	targetRepo := repository.NewTargetRepository(db)
-	debtRepo := repository.NewDebtRepository(db)
-	debtUsecase := usecase.NewDebtUsecase(debtRepo)
-	debtHandler := delivery.NewDebtHandler(debtUsecase)
 	categoryRepo := repository.NewCategoryRepository(db)
 	categoryHandler := delivery.NewCategoryHandler(categoryRepo)
 
@@ -61,8 +58,7 @@ func main() {
 	// 2. WORKSPACE LAYER
 	// ---------------------------------------------------------
 	wsRepo := repository.NewWorkspaceRepository(db)
-	wsUsecase := usecase.NewWorkspaceUsecase(wsRepo, authRepo, categoryRepo)
-	wsHandler := delivery.NewWorkspaceHandler(wsUsecase)
+	wsUsecase := usecase.NewWorkspaceUsecase(wsRepo, authRepo, categoryRepo, targetRepo)
 
 	// ---------------------------------------------------------
 	// 3. TRANSACTION LAYER
@@ -70,12 +66,18 @@ func main() {
 	txRepo := repository.NewTransactionRepository(db)
 	tesseractClient := ocr.NewTesseractClient()
 	hybridScanner := ocr.NewHybridScanner(tesseractClient, geminiClient)
-
-	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, googleAuthService, geminiClient, hybridScanner, wsRepo, ocrClient, pendingRepo, targetRepo, debtRepo, debtUsecase, categoryRepo)
-	txHandler := delivery.NewTransactionHandler(txUsecase)
+	integrationUsecase := usecase.NewIntegrationUsecase(txRepo, authRepo, googleAuthService)
+	targetUsecase := usecase.NewTargetUsecase(targetRepo, txRepo)
+	txUsecase := usecase.NewTransactionUsecase(txRepo, authRepo, geminiClient, hybridScanner, wsRepo, ocrClient, pendingRepo, categoryRepo, targetUsecase)
+	pendingUsecase := usecase.NewPendingUsecase(pendingRepo, txRepo, categoryRepo, targetUsecase, txUsecase)
+	debtRepo := repository.NewDebtRepository(db)
+	debtUsecase := usecase.NewDebtUsecase(debtRepo, txRepo)
+	debtHandler := delivery.NewDebtHandler(debtUsecase)
+	txHandler := delivery.NewTransactionHandler(txUsecase, integrationUsecase, pendingUsecase, debtUsecase)
+	wsHandler := delivery.NewWorkspaceHandler(wsUsecase, targetUsecase)
 
 	// ---------------------------------------------------------
-	// 4. TELEGRAM BOT LAYER (Muka Baru Mobile Replacement)
+	// 5. TELEGRAM BOT LAYER (Muka Baru Mobile Replacement)
 	// ---------------------------------------------------------
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	bot, err := tgbotapi.NewBotAPI(botToken)
@@ -83,7 +85,18 @@ func main() {
 		log.Printf("⚠️ Gagal inisialisasi Telegram Bot: %v", err)
 	} else {
 		// Inisialisasi Handler Telegram
-		tgHandler := tgDelivery.NewTelegramHandler(bot, txUsecase, authUsecase, authRepo, wsUsecase, debtUsecase, wsRepo, pendingRepo)
+		tgHandler := tgDelivery.NewTelegramHandler(
+			bot,
+			txUsecase,
+			authUsecase,
+			authRepo,
+			wsUsecase,
+			debtUsecase,
+			wsRepo,
+			pendingRepo,
+			pendingUsecase,
+			targetUsecase,
+		)
 
 		// Jalankan Listener Telegram di Goroutine (Background)
 		go func() {
@@ -93,7 +106,7 @@ func main() {
 	}
 
 	// ---------------------------------------------------------
-	// 5. THE ROBOT WORKER (Background Job Gmail)
+	// 6. THE ROBOT WORKER (Background Job Gmail)
 	// ---------------------------------------------------------
 	go func() {
 		time.Sleep(10 * time.Second)
@@ -103,7 +116,7 @@ func main() {
 		for range ticker.C {
 			fmt.Println("🤖 [Robot Sync] Scan email mutasi sedang berjalan...")
 			ctxSync, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			errSync := txUsecase.SyncGmailTransactions(ctxSync)
+			errSync := integrationUsecase.SyncGmailTransactions(ctxSync)
 			if errSync != nil {
 				log.Printf("❌ [Robot Sync] Error: %v\n", errSync)
 			}
@@ -112,7 +125,7 @@ func main() {
 	}()
 
 	// ---------------------------------------------------------
-	// 6. SERVER CONFIG & ROUTES
+	// 7. SERVER CONFIG & ROUTES
 	// ---------------------------------------------------------
 	mux := http.NewServeMux()
 	delivery.MapRoutes(mux, authHandler, wsHandler, txHandler, debtHandler, categoryHandler, authRepo, db)

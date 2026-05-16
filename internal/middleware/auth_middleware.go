@@ -69,8 +69,14 @@ func AuthorizeWorkspaceOwner(db *gorm.DB) func(http.HandlerFunc) http.HandlerFun
 				return
 			}
 
-			// 2. Ambil workspace_id dari query param (misal: /api/ws?id=1)
-			wsIDStr := r.URL.Query().Get("id")
+			// FIX: Pake PathValue buat ngambil ID dari "/workspaces/{id}/..."
+			wsIDStr := r.PathValue("id")
+
+			// Kalau kosong (jaga-jaga), coba fallback ke Query Param
+			if wsIDStr == "" {
+				wsIDStr = r.URL.Query().Get("id")
+			}
+
 			wsID, _ := strconv.Atoi(wsIDStr)
 
 			// 3. Cek di DB apakah dia Owner
@@ -78,7 +84,6 @@ func AuthorizeWorkspaceOwner(db *gorm.DB) func(http.HandlerFunc) http.HandlerFun
 			err := db.Where("id = ? AND owner_id = ?", wsID, userID).First(&ws).Error
 
 			if err != nil {
-				// 4. PAKE CUSTOM ERROR LO!
 				sendError(w, apperror.Forbidden("Only the owner can change this workspace!"))
 				return
 			}
@@ -97,11 +102,17 @@ func AuthorizeWorkspaceMember(db *gorm.DB) func(http.HandlerFunc) http.HandlerFu
 				return
 			}
 
-			// Cek workspace_id dari query param
-			wsIDStr := r.URL.Query().Get("workspace_id")
+			// FIX: Ambil dari Path Parameter dulu (karena route kita /workspaces/{id}/...)
+			wsIDStr := r.PathValue("id")
+
+			// Kalo kosong, baru fallback cari di Query Parameter
 			if wsIDStr == "" {
-				wsIDStr = r.URL.Query().Get("id") // fallback ke 'id'
+				wsIDStr = r.URL.Query().Get("workspace_id")
 			}
+			if wsIDStr == "" {
+				wsIDStr = r.URL.Query().Get("id")
+			}
+
 			wsID, _ := strconv.Atoi(wsIDStr)
 
 			var member models.WorkspaceMember
