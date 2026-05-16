@@ -8,24 +8,26 @@ import (
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/dto"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
+	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/utils"
 )
 
 type WorkspaceHandler struct {
-	usecase usecase.WorkspaceUsecase
+	usecase       usecase.WorkspaceUsecase
+	targetUsecase usecase.TargetUsecase
 }
 
 type UpdateWorkspaceRequest struct {
 	Name string `json:"name"`
 }
 
-func NewWorkspaceHandler(u usecase.WorkspaceUsecase) *WorkspaceHandler {
-	return &WorkspaceHandler{usecase: u}
+func NewWorkspaceHandler(u usecase.WorkspaceUsecase, tU usecase.TargetUsecase) *WorkspaceHandler {
+	return &WorkspaceHandler{usecase: u, targetUsecase: tU}
 }
 
 // 1. CREATE WORKSPACE
 func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST"))
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use POST"))
 		return
 	}
 
@@ -34,27 +36,22 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		// Lo bisa pake sendError di sini kalau mau seragam
-		SendError(w, apperror.BadRequest("Invalid JSON format"))
+		SendError(w, apperror.BadRequest("Invalid JSON payload"))
 		return
 	}
 
-	// Ambil UserID dari Context (hasil Middleware Authenticate)
 	userID, ok := r.Context().Value("user_id").(uint)
 	if !ok {
-		// Handle error session
-		SendError(w, apperror.Unauthorized("User session invalid"))
+		SendError(w, apperror.Unauthorized("Invalid user session"))
 		return
 	}
 
 	ws, err := h.usecase.CreateWorkspace(input.Name, userID)
 	if err != nil {
-		// Kirim error sesuai business logic (misal: limit tier)
 		SendError(w, err)
 		return
 	}
 
-	// 2. Mapping dari 'ws' (model GORM) ke 'response' (DTO)
 	response := dto.WorkspaceResponse{
 		ID:        ws.ID,
 		Name:      ws.Name,
@@ -62,121 +59,111 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: ws.CreatedAt,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+	utils.RespondWithJSON(w, http.StatusCreated, "success", "Workspace created successfully", response)
 }
 
 // 2. GET MY WORKSPACES
 func (h *WorkspaceHandler) GetMyWorkspaces(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use GET"))
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use GET"))
 		return
 	}
 
-	userID := r.Context().Value("user_id").(uint)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
+
 	workspaces, err := h.usecase.GetUserWorkspaces(userID)
 	if err != nil {
+		SendError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": workspaces})
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Workspaces retrieved successfully", workspaces)
 }
 
-// 3. UPDATE WORKSPACE (Owner Only - Di-filter via Middleware)
+// 3. UPDATE WORKSPACE
 func (h *WorkspaceHandler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut { // Pastikan method-nya bener (PUT/PATCH)
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use PUT"))
+	if r.Method != http.MethodPut {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use PUT"))
 		return
 	}
 
-	// Ganti pake DTO yang di atas tadi
 	var input UpdateWorkspaceRequest
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		SendError(w, apperror.BadRequest("Invalid JSON payload"))
 		return
 	}
 
-	// Ambil ID dari query param ?id=1
-	wsIDStr := r.URL.Query().Get("id")
+	// FIX: Pindah ke PathValue biar sesuai sama "/workspaces/{id}"
+	wsIDStr := r.PathValue("id")
 	wsID, _ := strconv.Atoi(wsIDStr)
 	userID := r.Context().Value("user_id").(uint)
 
 	err := h.usecase.UpdateWorkspace(uint(wsID), userID, input.Name)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	// Kalau Usecase lu balikin data workspace terbaru, mapping ke WorkspaceResponse di sini.
-	// Tapi kalau cuma mau message sukses, ini udah cukup:
-	json.NewEncoder(w).Encode(map[string]string{"message": "Workspace updated successfully"})
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Workspace updated successfully", nil)
 }
 
-// 4. DELETE WORKSPACE (Owner Only - Di-filter via Middleware)
+// 4. DELETE WORKSPACE
 func (h *WorkspaceHandler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete { // Pastikan method-nya bener (PUT/PATCH)
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use DELETE"))
+	if r.Method != http.MethodDelete {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use DELETE"))
 		return
 	}
 
-	wsIDStr := r.URL.Query().Get("id")
+	// FIX: Pindah ke PathValue juga
+	wsIDStr := r.PathValue("id")
 	wsID, _ := strconv.Atoi(wsIDStr)
 	userID := r.Context().Value("user_id").(uint)
 
 	err := h.usecase.DeleteWorkspace(uint(wsID), userID)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		SendError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Workspace deleted successfully"})
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Workspace deleted successfully", nil)
 }
 
 // 5. INVITE MEMBER
-// 5. INVITE MEMBER
 func (h *WorkspaceHandler) Invite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		SendError(w, apperror.MethodNotAllowed("Method not allowed, use POST"))
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use POST"))
 		return
 	}
 
-	// Ambil WorkspaceID dari Path Parameter (Go 1.22+ style)
 	wsIDStr := r.PathValue("id")
 	wsID, _ := strconv.ParseUint(wsIDStr, 10, 32)
 
 	var input struct {
-		Email string `json:"email"` // Sekarang pake Email
+		Email string `json:"email"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		SendError(w, apperror.BadRequest("Invalid JSON format"))
+		SendError(w, apperror.BadRequest("Invalid JSON payload"))
 		return
 	}
 
 	ownerID := r.Context().Value("user_id").(uint)
 
-	// Kirim Email ke Usecase
 	err := h.usecase.InviteMember(uint(wsID), ownerID, input.Email)
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Invitation sent successfully to " + input.Email})
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Invitation sent successfully to "+input.Email, nil)
 }
 
-// 6. RESPOND TO INVITATION (Accept/Reject)
 // 6A. ACCEPT INVITATION
 func (h *WorkspaceHandler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
-	// Ambil ID dari URL Path
 	invIDStr := r.PathValue("id")
 	invID, _ := strconv.ParseUint(invIDStr, 10, 32)
 	userID := r.Context().Value("user_id").(uint)
@@ -187,8 +174,7 @@ func (h *WorkspaceHandler) AcceptInvitation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Successfully joined the workspace!"})
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Successfully joined the workspace", nil)
 }
 
 // 6B. REJECT INVITATION
@@ -203,55 +189,45 @@ func (h *WorkspaceHandler) RejectInvitation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Invitation rejected!"})
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Invitation rejected successfully", nil)
 }
 
+// 7. SET TARGET
 func (h *WorkspaceHandler) SetTarget(w http.ResponseWriter, r *http.Request) {
-	// 1. Ambil userID dari context (setelah lewat authMW)
-	// Sesuaikan key context-nya dengan yang lu definisikan di middleware
 	_, ok := r.Context().Value("user_id").(uint)
 	if !ok {
-		SendError(w, apperror.Unauthorized("Sesi lu abis atau gak valid, Mi!"))
+		SendError(w, apperror.Unauthorized("Invalid user session"))
 		return
 	}
 
 	var req dto.SetTargetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendError(w, apperror.BadRequest("Data JSON-nya berantakan nih."))
+		SendError(w, apperror.BadRequest("Invalid JSON payload"))
 		return
 	}
 
-	// 2. Eksekusi UseCase
-	// Pastikan UseCase atau Handler lu nanti ngecek apakah userID ini beneran owner
-	// Tapi karena lu udah pasang ownerMW di routes, ini udah lebih aman.
-	if err := h.usecase.SetTarget(req); err != nil {
-		SendError(w, apperror.Internal(err.Error()))
+	if err := h.targetUsecase.SetTarget(req); err != nil {
+		SendError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Target period " + req.Period + " berhasil diset!",
-	})
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Target for period "+req.Period+" has been set successfully", nil)
 }
 
+// 8. GET MEMBERS
 func (h *WorkspaceHandler) GetMembers(w http.ResponseWriter, r *http.Request) {
-	// Ambil ID dari path parameter {id} sesuai template mux lu
 	idStr := r.PathValue("id")
 	workspaceID, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		http.Error(w, "Invalid workspace ID", http.StatusBadRequest)
+		SendError(w, apperror.BadRequest("Invalid workspace ID format"))
 		return
 	}
 
-	// Panggil usecase buat ambil daftar member
 	members, err := h.usecase.GetMembers(uint(workspaceID))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		SendError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(members)
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Workspace members retrieved successfully", members)
 }

@@ -37,7 +37,7 @@ func NewAuthRepository(params *gorm.DB) AuthRepository {
 }
 
 func (r *authRepository) Create(user *models.User) error {
-	return r.db.Create(&user).Error
+	return r.db.Create(user).Error
 }
 
 func (r *authRepository) Update(user *models.User) error {
@@ -45,12 +45,12 @@ func (r *authRepository) Update(user *models.User) error {
 }
 
 func (r *authRepository) FindByEmail(email string) (*models.User, error) {
-	var input models.User
-	err := r.db.Where("email = ?", email).First(&input).Error
+	var user models.User
+	err := r.db.Where("email = ?", email).First(&user).Error
 	if err != nil {
 		return nil, err
 	}
-	return &input, nil
+	return &user, nil
 }
 
 func (r *authRepository) FindByID(id uint) (*models.User, error) {
@@ -62,9 +62,7 @@ func (r *authRepository) FindByID(id uint) (*models.User, error) {
 	return &user, nil
 }
 
-// 2. Fungsi Tambahan: Update Tier (Free ke Pro/Platinum)
 func (r *authRepository) UpdateTier(id uint, tier string) error {
-	// Pake .Model().Update() biar GORM tau table mana yang mau di-update field-nya aja
 	return r.db.Model(&models.User{}).Where("id = ?", id).Update("account_tier", tier).Error
 }
 
@@ -75,7 +73,10 @@ func (r *authRepository) CreateRefreshToken(token *models.RefreshToken) error {
 func (r *authRepository) GetRefreshToken(token string) (*models.RefreshToken, error) {
 	var rt models.RefreshToken
 	err := r.db.Where("refresh_token = ?", token).First(&rt).Error
-	return &rt, err
+	if err != nil {
+		return nil, err
+	}
+	return &rt, nil
 }
 
 func (r *authRepository) DeleteRefreshToken(token string) error {
@@ -88,14 +89,12 @@ func (r *authRepository) CreateRevokeToken(token *models.RevokeToken) error {
 
 func (r *authRepository) IsTokenRevoked(token string) bool {
 	var rt models.RevokeToken
-	// Cek apakah token ada di tabel blacklist
 	err := r.db.Where("token = ?", token).First(&rt).Error
-	return err == nil // Kalau ketemu (nil), berarti di-revoke (true)
+	return err == nil
 }
 
 func (r *authRepository) FindAllWithGmail() ([]models.User, error) {
 	var users []models.User
-	// Cari user yang gmail_enabled nya true
 	err := r.db.Where("gmail_enabled = ?", true).Find(&users).Error
 	return users, err
 }
@@ -105,31 +104,28 @@ func (r *authRepository) GetByTelegramID(tgID int64) (*models.User, error) {
 	err := r.db.Preload("OwnedWorkspaces").Where("telegram_id = ?", tgID).First(&user).Error
 
 	if err != nil {
-		// Jika data emang gak ada, balikin nil, nil biar aman buat pengecekan
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
-		return nil, err // Jika error lain (koneksi/db mati), balikin errornya
+		return nil, err
 	}
 
 	return &user, nil
 }
 
 func (r *authRepository) IncrementOCRUsage(userID uint) error {
-	// Kita pake gorm.Expr biar SQL-nya: SET ocr_usage_count = ocr_usage_count + 1
 	return r.db.Model(&models.User{}).Where("id = ?", userID).
 		UpdateColumn("ocr_usage_count", gorm.Expr("ocr_usage_count + ?", 1)).Error
 }
 
 func (r *authRepository) ResetOCRUsage(userID uint, now time.Time) error {
 	return r.db.Model(&models.User{}).Where("id = ?", userID).
-		UpdateColumns(map[string]interface{}{
+		Updates(map[string]interface{}{
 			"ocr_usage_count":  0,
 			"last_reset_usage": now,
 		}).Error
 }
 
-// Update kode binding saat user klik di Web
 func (r *authRepository) SetBindingCode(userID uint, code string, expiry time.Time) error {
 	return r.db.Model(&models.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
 		"binding_code":       code,
@@ -137,15 +133,15 @@ func (r *authRepository) SetBindingCode(userID uint, code string, expiry time.Ti
 	}).Error
 }
 
-// Cari user berdasarkan kode (untuk bot)
 func (r *authRepository) FindByBindingCode(code string) (*models.User, error) {
 	var user models.User
-	// Syarat: Kode pas DAN belum expired
 	err := r.db.Where("binding_code = ? AND binding_expires_at > ?", code, time.Now()).First(&user).Error
-	return &user, err
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
 }
 
-// Ikat TelegramID dan hapus kodenya
 func (r *authRepository) FinalizeBinding(userID uint, telegramID int64) error {
 	return r.db.Model(&models.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
 		"telegram_id":        telegramID,

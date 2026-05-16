@@ -66,3 +66,19 @@ func Conflict(msg string) error {
 		Message: msg,
 	}
 }
+
+// 410 Gone / 401: Bisa buat OTP yang udah kadaluwarsa
+func Expired(msg string) error {
+	return &Apperror{
+		Code:    http.StatusGone, // Atau 401 tergantung selera flow lu
+		Message: msg,
+	}
+}
+
+// 429 Too Many Requests: Penting buat limitasi OTP biar gak dispam
+func TooManyRequests(msg string) error {
+	return &Apperror{
+		Code:    http.StatusTooManyRequests,
+		Message: msg,
+	}
+}

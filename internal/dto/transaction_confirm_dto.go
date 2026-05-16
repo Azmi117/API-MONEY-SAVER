@@ -17,6 +17,10 @@ type ConfirmTransactionRequest struct {
 	CategoryID  *uint   `json:"category_id"`
 	Note        string  `json:"note"`
 
+	// FIX: Tambahin 2 field ini biar ketangkep pas nge-decode JSON
+	Method  string `json:"method"`
+	GmailID string `json:"gmail_id"`
+
 	// Ganti []models.TransactionItem jadi struct pembantu tadi
 	Items []TransactionItemConfirm `json:"items"`
 }

@@ -2,11 +2,9 @@ package usecase
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/Azmi117/API-MONEY-SAVER.git/internal/dto"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/repository"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
@@ -24,7 +22,6 @@ type WorkspaceUsecase interface {
 	UpgradeTier(userID uint, newTier string) error
 	InitGroupConnection(telegramUserID int64, workspaceID uint, telegramChatID int64) error
 	GetUserWorkspaceList(telegramUserID int64) (string, error)
-	SetTarget(req dto.SetTargetRequest) error
 	CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64, wsType string) (*models.Workspace, error)
 	GetMembers(workspaceID uint) ([]models.WorkspaceMember, error)
 }
@@ -33,33 +30,49 @@ type workspaceUsecase struct {
 	workspaceRepo repository.WorkspaceRepository
 	authRepo      repository.AuthRepository
 	categoryRepo  repository.CategoryRepository
+	targetRepo    repository.TargetRepository
 }
 
-func NewWorkspaceUsecase(wr repository.WorkspaceRepository, ar repository.AuthRepository, cr repository.CategoryRepository) WorkspaceUsecase {
+func NewWorkspaceUsecase(wr repository.WorkspaceRepository, ar repository.AuthRepository, cr repository.CategoryRepository, tr repository.TargetRepository) WorkspaceUsecase {
 	return &workspaceUsecase{
 		workspaceRepo: wr,
 		authRepo:      ar,
 		categoryRepo:  cr,
+		targetRepo:    tr,
 	}
+}
+
+func (u *workspaceUsecase) checkWorkspaceLimit(userID uint) error {
+	user, err := u.authRepo.FindByID(userID)
+	if err != nil {
+		return apperror.NotFound("User not found")
+	}
+
+	existingWorkspaces, _ := u.workspaceRepo.FindByOwnerID(userID)
+	count := len(existingWorkspaces)
+
+	if user.AccountTier == "free" && count >= 2 {
+		return apperror.UnprocessableEntity("Workspace limit reached: FREE tier is limited to 2 workspaces")
+	}
+	if user.AccountTier == "pro" && count >= 10 {
+		return apperror.UnprocessableEntity("Workspace limit reached: PRO tier is limited to 10 workspaces")
+	}
+
+	return nil
 }
 
 // 1. CREATE WORKSPACE
 func (u *workspaceUsecase) CreateWorkspace(name string, ownerID uint) (*models.Workspace, error) {
-	user, _ := u.authRepo.FindByID(ownerID)
-	existingWorkspaces, _ := u.workspaceRepo.FindByOwnerID(ownerID)
-
-	count := len(existingWorkspaces)
-	if user.AccountTier == "free" && count >= 2 {
-		return nil, apperror.UnprocessableEntity("Workspace limit reached: FREE tier is limited to 2 workspaces!")
-	}
-	if user.AccountTier == "pro" && count >= 10 {
-		return nil, apperror.UnprocessableEntity("Workspace limit reached: PRO tier is limited to 10 workspaces!")
+	// FIX: Panggil helper method biar rapi
+	if err := u.checkWorkspaceLimit(ownerID); err != nil {
+		return nil, err
 	}
 
 	workspace := &models.Workspace{Name: name, OwnerID: ownerID}
 	if err := u.workspaceRepo.Create(workspace); err != nil {
-		return nil, err
+		return nil, apperror.Internal("Failed to create workspace")
 	}
+
 	u.seedDefaultCategories(workspace.ID)
 
 	return workspace, nil
@@ -67,37 +80,34 @@ func (u *workspaceUsecase) CreateWorkspace(name string, ownerID uint) (*models.W
 
 func (u *workspaceUsecase) seedDefaultCategories(wsID uint) {
 	defaults := []models.Category{
-		{Name: "Jajan", Type: "expense", Icon: "snack", WorkspaceID: wsID},
-		{Name: "Makan Berat", Type: "expense", Icon: "rice", WorkspaceID: wsID},
-		{Name: "Gaji", Type: "income", Icon: "money", WorkspaceID: wsID},
-		{Name: "Proyekan", Type: "income", Icon: "code", WorkspaceID: wsID},
-		{Name: "Self Reward", Type: "expense", Icon: "star", WorkspaceID: wsID}, // Tambahan biar gak hampa idup
+		{Name: "Snacks", Type: "expense", Icon: "snack", WorkspaceID: wsID},
+		{Name: "Meals", Type: "expense", Icon: "rice", WorkspaceID: wsID},
+		{Name: "Salary", Type: "income", Icon: "money", WorkspaceID: wsID},
+		{Name: "Project", Type: "income", Icon: "code", WorkspaceID: wsID},
+		{Name: "Self Reward", Type: "expense", Icon: "star", WorkspaceID: wsID},
 	}
 
 	for _, cat := range defaults {
-		// Kita abaikan error-nya biar gak ngerusak proses pembuatan workspace utama
 		_ = u.categoryRepo.Create(&cat)
 	}
 }
 
-// 2. MANAGEMENT FEATURES (Lengkap)
+// 2. MANAGEMENT FEATURES
 func (u *workspaceUsecase) GetUserWorkspaces(userID uint) ([]models.Workspace, error) {
-	workspace, err := u.workspaceRepo.FindAllByUserID(userID)
-
+	workspaces, err := u.workspaceRepo.FindAllByUserID(userID)
 	if err != nil {
-		return nil, apperror.Internal("Failed to retrieve workspaces.")
+		return nil, apperror.Internal("Failed to retrieve workspaces")
 	}
-
-	return workspace, nil
+	return workspaces, nil
 }
 
 func (u *workspaceUsecase) UpdateWorkspace(workspaceID uint, userID uint, newName string) error {
 	ws, err := u.workspaceRepo.FindByID(workspaceID)
 	if err != nil {
-		return apperror.NotFound("Workspace not found!")
+		return apperror.NotFound("Workspace not found")
 	}
 	if ws.OwnerID != userID {
-		return apperror.Forbidden("Access denied: You are not the owner of this workspace!")
+		return apperror.Forbidden("Access denied: You are not the owner of this workspace")
 	}
 	ws.Name = newName
 	return u.workspaceRepo.Update(ws)
@@ -106,71 +116,70 @@ func (u *workspaceUsecase) UpdateWorkspace(workspaceID uint, userID uint, newNam
 func (u *workspaceUsecase) DeleteWorkspace(workspaceID uint, userID uint) error {
 	ws, err := u.workspaceRepo.FindByID(workspaceID)
 	if err != nil {
-		return apperror.NotFound("Workspace not found!")
+		return apperror.NotFound("Workspace not found")
 	}
 	if ws.OwnerID != userID {
-		return apperror.Forbidden("Access denied: You are not the owner of this workspace!")
+		return apperror.Forbidden("Access denied: You are not the owner of this workspace")
 	}
 	return u.workspaceRepo.Delete(workspaceID)
 }
 
-// 3. INVITATION LOGIC (With Safety Checks)
-// 3. INVITATION LOGIC (Updated to Email)
+// 3. INVITATION LOGIC
 func (u *workspaceUsecase) InviteMember(workspaceID uint, ownerID uint, email string) error {
-	// 1. Cari User ID berdasarkan Email pake method yang udah lu buat
 	invitedUser, err := u.authRepo.FindByEmail(email)
 	if err != nil {
-		return apperror.NotFound("User dengan email tersebut tidak ditemukan!")
+		return apperror.NotFound("User with the specified email was not found")
 	}
 
 	if ownerID == invitedUser.ID {
-		return apperror.BadRequest("Invalid action: You cannot invite yourself!")
+		return apperror.BadRequest("Invalid action: You cannot invite yourself")
 	}
 
 	ws, _ := u.workspaceRepo.FindByID(workspaceID)
 	if ws.OwnerID != ownerID {
-		return apperror.Forbidden("Access denied: You are not the owner of this workspace!")
+		return apperror.Forbidden("Access denied: You are not the owner of this workspace")
 	}
 
-	// Cek limitasi Tiering
 	user, _ := u.authRepo.FindByID(ownerID)
 	currentMembers, _ := u.workspaceRepo.GetMembersCount(workspaceID)
 	if user.AccountTier == "free" && currentMembers >= 2 {
-		return apperror.UnprocessableEntity("Member limit reached: FREE tier allows a maximum of 2 members!")
+		return apperror.UnprocessableEntity("Member limit reached: FREE tier allows a maximum of 2 members")
 	}
 
-	// VALIDASI TAMBAHAN: Cek apa dia udah jadi member atau belum
 	isAlreadyMember, _ := u.workspaceRepo.IsMember(workspaceID, invitedUser.ID)
 	if isAlreadyMember {
-		return apperror.UnprocessableEntity("This user is already a member of this workspace.")
+		return apperror.Conflict("This user is already a member of this workspace")
 	}
 
 	invitation := &models.WorkspaceInvitation{
 		WorkspaceID: workspaceID,
 		InviterID:   ownerID,
-		InvitedID:   invitedUser.ID, // Tetap simpan ID ke DB
+		InvitedID:   invitedUser.ID,
 		Status:      "pending",
 	}
 
 	if err := u.workspaceRepo.CreateInvitation(invitation); err != nil {
-		return apperror.Internal("Failed to create workspace invitation.")
+		return apperror.Internal("Failed to create workspace invitation")
 	}
 
 	return nil
 }
 
 func (u *workspaceUsecase) GetPendingInvitations(userID uint) ([]models.WorkspaceInvitation, error) {
-	return u.workspaceRepo.FindPendingInvitationsByUserID(userID)
+	invitations, err := u.workspaceRepo.FindPendingInvitationsByUserID(userID)
+	if err != nil {
+		return nil, apperror.Internal("Failed to retrieve invitations")
+	}
+	return invitations, nil
 }
 
-// Pecah jadi dua fungsi terpisah
 func (u *workspaceUsecase) AcceptInvitation(invitationID uint, userID uint) error {
 	inv, err := u.workspaceRepo.FindInvitationByID(invitationID)
 	if err != nil || inv.InvitedID != userID {
-		return apperror.NotFound("Invitation not found!")
+		return apperror.NotFound("Invitation not found")
 	}
 	if inv.Status != "pending" {
-		return apperror.UnprocessableEntity("This invitation has already been processed!")
+		return apperror.UnprocessableEntity("This invitation has already been processed")
 	}
 
 	return u.workspaceRepo.AcceptInvitation(inv)
@@ -179,107 +188,84 @@ func (u *workspaceUsecase) AcceptInvitation(invitationID uint, userID uint) erro
 func (u *workspaceUsecase) RejectInvitation(invitationID uint, userID uint) error {
 	inv, err := u.workspaceRepo.FindInvitationByID(invitationID)
 	if err != nil || inv.InvitedID != userID {
-		return apperror.NotFound("Invitation not found!")
+		return apperror.NotFound("Invitation not found")
 	}
 	if inv.Status != "pending" {
-		return apperror.UnprocessableEntity("This invitation has already been processed!")
+		return apperror.UnprocessableEntity("This invitation has already been processed")
 	}
 
 	inv.Status = "rejected"
 	return u.workspaceRepo.UpdateInvitationStatus(inv)
 }
 
-// 4. UPGRADE SIMULATION
+// 4. MANAGEMENT & INTEGRATION
 func (u *workspaceUsecase) UpgradeTier(userID uint, newTier string) error {
-	// Karena lo butuh update field di User, pastikan AuthRepo punya fungsi UpdateTier
 	return u.authRepo.UpdateTier(userID, newTier)
 }
 
 func (u *workspaceUsecase) InitGroupConnection(telegramUserID int64, workspaceID uint, telegramChatID int64) error {
-	// 1. Cari user berdasarkan Telegram ID
 	user, err := u.authRepo.GetByTelegramID(telegramUserID)
 	if err != nil || user == nil {
-		return errors.New("lu belum binding akun, Mi! Ketik /bind dulu di private chat bot")
+		return apperror.Unauthorized("Telegram account not linked. Please use /bind in private chat first")
 	}
 
-	// 2. Pastiin workspace itu milik si user
 	ws, err := u.workspaceRepo.GetByIDAndOwner(workspaceID, user.ID)
 	if err != nil {
-		return errors.New("workspace gak ketemu atau lu bukan owner-nya!")
+		return apperror.NotFound("Workspace not found or unauthorized access")
 	}
 
-	// 3. Update telegram_chat_id di workspace tersebut
 	return u.workspaceRepo.ConnectToTelegramGroup(ws.ID, telegramChatID)
 }
 
 func (u *workspaceUsecase) GetUserWorkspaceList(telegramUserID int64) (string, error) {
-	// 1. Cari usernya dulu
 	user, err := u.authRepo.GetByTelegramID(telegramUserID)
 	if err != nil || user == nil {
-		return "", errors.New("lu belum binding akun, Mi! Ketik /bind dulu.")
+		return "", apperror.Unauthorized("Telegram account not linked. Please use /bind first")
 	}
 
-	// 2. Ambil semua workspacenya
 	workspaces, err := u.workspaceRepo.GetWorkspacesByOwner(user.ID)
 	if err != nil {
-		return "", err
+		return "", apperror.Internal("Failed to retrieve workspace list")
 	}
 
 	if len(workspaces) == 0 {
-		return "Lu belum punya workspace apa-apa di Web, Mi.", nil
+		return "You do not have any workspaces registered yet.", nil
 	}
 
-	// 3. Susun jadi teks yang rapi
 	var sb strings.Builder
-	sb.WriteString("📂 **Daftar Workspace Lu:**\n\n")
+	sb.WriteString("📂 **Your Workspace List:**\n\n")
 	for _, ws := range workspaces {
 		sb.WriteString(fmt.Sprintf("🔹 **%s**\n   └ ID: `%d`\n", ws.Name, ws.ID))
 	}
-	sb.WriteString("\nKetik `/init [ID]` di Grup buat hubungin.")
+	sb.WriteString("\nType `/init [ID]` in your group to connect.")
 
 	return sb.String(), nil
 }
 
-func (u *workspaceUsecase) SetTarget(req dto.SetTargetRequest) error {
-	target := &models.Target{
-		WorkspaceID:   req.WorkspaceID,
-		Period:        req.Period,
-		AmountLimit:   req.AmountLimit,
-		SavingsTarget: req.SavingsTarget,
-		IsActive:      true,
-	}
-	return u.workspaceRepo.UpsertTarget(target)
-}
-
 func (u *workspaceUsecase) CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64, wsType string) (*models.Workspace, error) {
-	// 1. Cari User berdasarkan Telegram ID
 	user, err := u.authRepo.GetByTelegramID(telegramID)
-	if err != nil {
-		return nil, apperror.Unauthorized("Akun lu belum ter-bind, Mi! Bind dulu di private chat.")
+	if err != nil || user == nil {
+		return nil, apperror.Unauthorized("Telegram account not linked. Please bind your account in private chat first")
 	}
 
-	// 2. Cek kuota berdasarkan AccountTier (Sesuai logic CreateWorkspace lu)
-	existingWorkspaces, _ := u.workspaceRepo.FindByOwnerID(user.ID)
-	count := len(existingWorkspaces)
-
-	if user.AccountTier == "free" && count >= 2 {
-		return nil, apperror.UnprocessableEntity("Workspace limit reached: FREE tier is limited to 2 workspaces!")
-	}
-	if user.AccountTier == "pro" && count >= 10 {
-		return nil, apperror.UnprocessableEntity("Workspace limit reached: PRO tier is limited to 10 workspaces!")
+	// FIX: Panggil helper method yang sama! Gak perlu copy-paste logic tier lagi!
+	if err := u.checkWorkspaceLimit(user.ID); err != nil {
+		return nil, err
 	}
 
-	// 3. Buat Workspace Baru dengan TelegramChatID
 	workspace := &models.Workspace{
 		Name:           chatTitle,
 		OwnerID:        user.ID,
-		TelegramChatID: &chatID, // Pastikan field ini ada di model Workspace lu
+		TelegramChatID: &chatID,
 		Type:           wsType,
 	}
 
 	if err := u.workspaceRepo.Create(workspace); err != nil {
-		return nil, err
+		return nil, apperror.Internal("Failed to create workspace via Telegram")
 	}
+
+	// FIX: Wajib panggil seed category biar workspace dari Telegram gak rusak!
+	u.seedDefaultCategories(workspace.ID)
 
 	return workspace, nil
 }
