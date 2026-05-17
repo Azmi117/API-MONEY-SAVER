@@ -68,4 +68,8 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	// --- CATEGORY ROUTES ---
 	mux.HandleFunc("POST "+prefix+"workspaces/{id}/categories", authMW(ownerMW(cH.Create))) //done
 	mux.HandleFunc("GET "+prefix+"workspaces/{id}/categories", authMW(cH.GetByWorkspace))   //done
+
+	// --- OTP ROUTES ---
+	mux.HandleFunc("POST "+prefix+"auth/register/verify", aH.VerifyRegister)
+	mux.HandleFunc("POST "+prefix+"auth/otp/resend", aH.ResendOTP)
 }

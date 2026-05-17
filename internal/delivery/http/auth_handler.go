@@ -228,3 +228,58 @@ func (h *authHandler) GetBindingCode(w http.ResponseWriter, r *http.Request) {
 
 	utils.RespondWithJSON(w, http.StatusOK, "success", "Binding code generated successfully", data)
 }
+
+func (h *authHandler) VerifyRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed. Please use POST."))
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+		Code  string `json:"code"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		SendError(w, apperror.BadRequest("Invalid JSON payload."))
+		return
+	}
+
+	if err := h.usecase.VerifyRegisterOTP(req.Email, req.Code); err != nil {
+		SendError(w, err)
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Account successfully activated. Please log in.", nil)
+}
+
+func (h *authHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed. Please use POST."))
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+		Type  string `json:"type"` // "register", "login", dll
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		SendError(w, apperror.BadRequest("Invalid JSON payload."))
+		return
+	}
+
+	// Cari user ID dari email dulu
+	user, err := h.usecase.GetUserByEmail(req.Email)
+	if err != nil {
+		SendError(w, apperror.NotFound("User not found."))
+		return
+	}
+
+	if err := h.usecase.SendOrResendOTP(user.ID, req.Email, req.Type); err != nil {
+		SendError(w, err)
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, "success", "OTP code has been successfully resent to your email.", nil)
+}
