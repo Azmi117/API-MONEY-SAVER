@@ -24,6 +24,7 @@ func main() {
 		&models.TransactionItem{},
 		&models.PendingTransaction{},
 		&models.Debt{},
+		&models.OTP{},
 	)
 
 	if err != nil {

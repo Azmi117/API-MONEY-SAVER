@@ -26,6 +26,7 @@ type AuthRepository interface {
 	SetBindingCode(userID uint, code string, expiry time.Time) error
 	FindByBindingCode(code string) (*models.User, error)
 	FinalizeBinding(userID uint, telegramID int64) error
+	UpdateVerificationStatus(userID uint, status bool) error
 }
 
 type authRepository struct {
@@ -148,4 +149,9 @@ func (r *authRepository) FinalizeBinding(userID uint, telegramID int64) error {
 		"binding_code":       nil,
 		"binding_expires_at": nil,
 	}).Error
+}
+
+func (r *authRepository) UpdateVerificationStatus(userID uint, status bool) error {
+	// Pake GORM buat nge-update kolom is_verified jadi true/false
+	return r.db.Model(&models.User{}).Where("id = ?", userID).Update("is_verified", status).Error
 }

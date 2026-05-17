@@ -22,6 +22,7 @@ type User struct {
 	LastResetUsage     time.Time
 	BindingCode        *string `gorm:"size:20;index"`
 	BindingExpiresAt   *time.Time
+	IsVerified         bool `gorm:"default:false"`
 
 	// --- RELATIONSHIPS (Dua Arah) ---
 	OwnedWorkspaces     []Workspace           `gorm:"foreignKey:OwnerID"`

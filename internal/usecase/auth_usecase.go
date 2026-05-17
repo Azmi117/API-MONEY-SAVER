@@ -1,6 +1,9 @@
 package usecase
 
 import (
+	cryptoRand "crypto/rand"
+	"fmt"
+	"math/big"
 	"math/rand"
 	"os"
 	"time"
@@ -20,15 +23,20 @@ type AuthUsecase interface {
 	randomString(length int) string
 	RequestBindingCode(userID uint) (string, error)
 	VerifyAndBindTelegram(telegramID int64, code string) error
+	SendOrResendOTP(userID uint, email string, otpType string) error
+	VerifyRegisterOTP(email string, code string) error
+	GetUserByEmail(email string) (*models.User, error)
 }
 
 type authUsecase struct {
-	repo repository.AuthRepository
+	repo    repository.AuthRepository
+	otpRepo repository.OTPRepository
 }
 
-func NewAuthUsecase(params repository.AuthRepository) AuthUsecase {
+func NewAuthUsecase(repo repository.AuthRepository, otpRepo repository.OTPRepository) AuthUsecase {
 	return &authUsecase{
-		repo: params,
+		repo:    repo,
+		otpRepo: otpRepo,
 	}
 }
 
@@ -46,7 +54,23 @@ func (u *authUsecase) Register(user *models.User) error {
 	}
 
 	user.PasswordHash = hashedPass
-	return u.repo.Create(user)
+	user.IsVerified = false // Pastiin default-nya false biar gak lolos login
+
+	// 1. Simpan user ke tabel users dulu
+	if err := u.repo.Create(user); err != nil {
+		return err // Kalo gagal bikin user, langsung stop
+	}
+
+	// 2. KUNCI UTAMANYA DI SINI!
+	// Setelah user kebuat (dapet user.ID), langsung cetak & kirim OTP
+	err = u.SendOrResendOTP(user.ID, user.Email, "register")
+	if err != nil {
+		// Walaupun gagal ngirim OTP (misal email nyangkut), user udah terdaftar.
+		// Dia tetep bisa pake endpoint /otp/resend nanti buat nyoba lagi.
+		return err
+	}
+
+	return nil
 }
 
 func (u *authUsecase) Login(email, password string) (string, string, error) {
@@ -58,6 +82,17 @@ func (u *authUsecase) Login(email, password string) (string, string, error) {
 	if err := utils.VerifyPassword(password, existing.PasswordHash); err != nil {
 		return "", "", apperror.Unauthorized("Invalid email or password")
 	}
+
+	// =================================================================
+	// 🚨 SATPAM VERIFIKASI: Blokir kalau akun belum diaktifkan via OTP
+	// =================================================================
+	if !existing.IsVerified {
+		// Lu bisa otomatis panggil resend OTP di sini biar UX lebih smooth
+		// u.SendOrResendOTP(existing.ID, existing.Email, "register")
+
+		return "", "", apperror.Forbidden("Account is not verified. Please check your email for the OTP code.")
+	}
+	// =================================================================
 
 	jSecret := os.Getenv("JWT_SECRET")
 	rSecret := os.Getenv("REFRESH_SECRET")
@@ -73,9 +108,12 @@ func (u *authUsecase) Login(email, password string) (string, string, error) {
 		return "", "", apperror.Internal("Could not generate access token")
 	}
 
+	// =================================================================
+	// ⏳ REFRESH TOKEN 1 BULAN (30 Hari) SESUAI REQUEST LU
+	// =================================================================
 	refreshTokenClaims := jwt.MapClaims{
 		"user_id": existing.ID,
-		"exp":     time.Now().Add(time.Hour * 24 * 7).Unix(),
+		"exp":     time.Now().Add(time.Hour * 24 * 30).Unix(), // Diubah jadi 30 hari
 	}
 	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshTokenClaims)
 	refreshStr, err := refreshToken.SignedString([]byte(rSecret))
@@ -86,7 +124,7 @@ func (u *authUsecase) Login(email, password string) (string, string, error) {
 	rt := models.RefreshToken{
 		UserID:       existing.ID,
 		RefreshToken: refreshStr,
-		ExpiresAt:    time.Now().Add(time.Hour * 24 * 7),
+		ExpiresAt:    time.Now().Add(time.Hour * 24 * 30), // Diubah jadi 30 hari
 	}
 
 	if err := u.repo.CreateRefreshToken(&rt); err != nil {
@@ -187,4 +225,75 @@ func (u *authUsecase) VerifyAndBindTelegram(telegramID int64, code string) error
 	}
 
 	return nil
+}
+
+func generateOTP() string {
+	max := big.NewInt(1000000)
+	n, _ := cryptoRand.Int(cryptoRand.Reader, max)
+	return fmt.Sprintf("%06d", n.Int64())
+}
+
+// METHOD UTAMA: Generate, Save, & Send Email
+func (u *authUsecase) SendOrResendOTP(userID uint, email string, otpType string) error {
+	// 1. Rate Limiter: Cek apakah baru minta kurang dari 1 menit yang lalu
+	latestOTP, _ := u.otpRepo.FindLatestByUserID(userID, otpType)
+	if latestOTP != nil {
+		if time.Since(latestOTP.CreatedAt).Seconds() < 60 {
+			return apperror.TooManyRequests("Please wait 1 minute before requesting a new OTP code.")
+		}
+	}
+
+	// 2. Generate kode & Simpan ke DB (Expired 5 menit)
+	code := generateOTP()
+	otpData := &models.OTP{
+		UserID:    userID,
+		OTPCode:   code,
+		Type:      otpType,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	}
+
+	if err := u.otpRepo.Create(otpData); err != nil {
+		return apperror.Internal("Failed to generate OTP code.")
+	}
+
+	// 3. Kirim via Email (Pake Goroutine biar gak nge-block response ke user!)
+	go func() {
+		subject := "Your OTP Code - Money Saver"
+		body := fmt.Sprintf("<h1>Your OTP Code is: <b>%s</b></h1><p>It will expire in 5 minutes.</p>", code)
+		_ = utils.SendEmail(email, subject, body)
+	}()
+
+	return nil
+}
+
+// METHOD VERIFIKASI: Cek OTP valid/nggak
+func (u *authUsecase) VerifyRegisterOTP(email string, code string) error {
+	user, err := u.repo.FindByEmail(email)
+	if err != nil {
+		return apperror.NotFound("User not found.")
+	}
+
+	latestOTP, _ := u.otpRepo.FindLatestByUserID(user.ID, "register")
+	if latestOTP == nil || latestOTP.OTPCode != code {
+		return apperror.BadRequest("Invalid OTP code.")
+	}
+	if time.Now().After(latestOTP.ExpiresAt) {
+		return apperror.BadRequest("OTP code has expired.")
+	}
+
+	// Lolos verifikasi! Ubah status user & buang OTP-nya
+	_ = u.repo.UpdateVerificationStatus(user.ID, true) // Asumsi lu punya fungsi ini di authRepo
+	_ = u.otpRepo.DeleteByUserIDAndType(user.ID, "register")
+
+	return nil
+}
+
+func (u *authUsecase) GetUserByEmail(email string) (*models.User, error) {
+	user, err := u.repo.FindByEmail(email)
+	if err != nil {
+		// Kalo error atau gak ketemu, balikin custom error 404 lu
+		return nil, apperror.NotFound("User with the specified email address was not found.")
+	}
+
+	return user, nil
 }
