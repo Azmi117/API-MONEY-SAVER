@@ -26,6 +26,8 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("POST "+prefix+"auth/register", aH.Register)     //done
 	mux.HandleFunc("POST "+prefix+"auth/refresh", aH.Refresh)       //done
 	mux.HandleFunc("POST "+prefix+"auth/logout", authMW(aH.Logout)) //done
+	mux.HandleFunc("GET "+prefix+"auth/sso/google/login", aH.GoogleSSOLogin)
+	mux.HandleFunc("GET "+prefix+"auth/sso/google/callback", aH.GoogleSSOCallback)
 
 	// --- TELEGRAM BINDING ROUTE ---
 	mux.HandleFunc("GET "+prefix+"auth/telegram/binding-code", authMW(aH.GetBindingCode)) //done
@@ -70,6 +72,6 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("GET "+prefix+"workspaces/{id}/categories", authMW(cH.GetByWorkspace))   //done
 
 	// --- OTP ROUTES ---
-	mux.HandleFunc("POST "+prefix+"auth/register/verify", aH.VerifyRegister)
-	mux.HandleFunc("POST "+prefix+"auth/otp/resend", aH.ResendOTP)
+	mux.HandleFunc("POST "+prefix+"auth/register/verify", aH.VerifyRegister) //done
+	mux.HandleFunc("POST "+prefix+"auth/otp/resend", aH.ResendOTP)           //done
 }

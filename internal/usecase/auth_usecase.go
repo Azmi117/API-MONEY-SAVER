@@ -26,6 +26,7 @@ type AuthUsecase interface {
 	SendOrResendOTP(userID uint, email string, otpType string) error
 	VerifyRegisterOTP(email string, code string) error
 	GetUserByEmail(email string) (*models.User, error)
+	LoginSSO(email string, name string) (string, string, error)
 }
 
 type authUsecase struct {
@@ -296,4 +297,64 @@ func (u *authUsecase) GetUserByEmail(email string) (*models.User, error) {
 	}
 
 	return user, nil
+}
+
+func (u *authUsecase) LoginSSO(email string, name string) (string, string, error) {
+	existing, err := u.repo.FindByEmail(email)
+
+	// 1. Kalo user belum ada, kita daftarin otomatis!
+	if err != nil || existing == nil {
+		newUser := &models.User{
+			Email:        email,
+			Name:         name, // <-- SEKARANG NAMANYA SUDAH MASUK DI SINI, GAK AKAN NULL LAGI!
+			PasswordHash: "",   // Kosongin aja, dia gak bakal bisa login manual sampe dia bikin password
+			IsVerified:   true, // Otomatis true karena Google udah ngeverifikasi emailnya
+		}
+
+		if errCreate := u.repo.Create(newUser); errCreate != nil {
+			return "", "", apperror.Internal("Failed to create user via SSO")
+		}
+		existing = newUser
+	} else if !existing.IsVerified {
+		// 2. Kalo akunnya ada TAPI belum aktif (misal daftar manual tapi males masukin OTP)
+		// Karena dia login via Google, otomatis kita verifikasiin aja.
+		_ = u.repo.UpdateVerificationStatus(existing.ID, true)
+		existing.IsVerified = true
+	}
+
+	// 3. GENERATE TOKEN (Sama persis kayak logic login biasa lu)
+	jSecret := os.Getenv("JWT_SECRET")
+	rSecret := os.Getenv("REFRESH_SECRET")
+
+	accessTokenClaims := jwt.MapClaims{
+		"user_id": existing.ID,
+		"exp":     time.Now().Add(time.Minute * 15).Unix(),
+	}
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessTokenClaims)
+	accessStr, err := accessToken.SignedString([]byte(jSecret))
+	if err != nil {
+		return "", "", apperror.Internal("Could not generate access token")
+	}
+
+	refreshTokenClaims := jwt.MapClaims{
+		"user_id": existing.ID,
+		"exp":     time.Now().Add(time.Hour * 24 * 30).Unix(),
+	}
+	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshTokenClaims)
+	refreshStr, err := refreshToken.SignedString([]byte(rSecret))
+	if err != nil {
+		return "", "", apperror.Internal("Could not generate refresh token")
+	}
+
+	rt := models.RefreshToken{
+		UserID:       existing.ID,
+		RefreshToken: refreshStr,
+		ExpiresAt:    time.Now().Add(time.Hour * 24 * 30),
+	}
+
+	if err := u.repo.CreateRefreshToken(&rt); err != nil {
+		return "", "", apperror.Internal("Failed to save session data")
+	}
+
+	return accessStr, refreshStr, nil
 }
