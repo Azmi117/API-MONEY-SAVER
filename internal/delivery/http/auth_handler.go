@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,9 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/service"
@@ -282,4 +286,79 @@ func (h *authHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondWithJSON(w, http.StatusOK, "success", "OTP code has been successfully resent to your email.", nil)
+}
+
+// Helper buat ngambil config khusus SSO
+func getSSOConfig() *oauth2.Config {
+	return &oauth2.Config{
+		ClientID:     os.Getenv("GOOGLE_SSO_CLIENT_ID"),
+		ClientSecret: os.Getenv("GOOGLE_SSO_CLIENT_SECRET"),
+		RedirectURL:  os.Getenv("GOOGLE_SSO_REDIRECT_URL"),
+		Scopes: []string{
+			"https://www.googleapis.com/auth/userinfo.email",
+			"https://www.googleapis.com/auth/userinfo.profile",
+		},
+		Endpoint: google.Endpoint,
+	}
+}
+
+// Handler 1: Ngarahin user ke halaman Login Google
+func (h *authHandler) GoogleSSOLogin(w http.ResponseWriter, r *http.Request) {
+	cfg := getSSOConfig()
+	// Pake random state, buat keamanan CSRF
+	url := cfg.AuthCodeURL("sso-state-random-string")
+	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+}
+
+// Handler 2: Nerima balasan dari Google (Callback)
+func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) {
+	state := r.FormValue("state")
+	if state != "sso-state-random-string" {
+		SendError(w, apperror.BadRequest("Invalid OAuth state"))
+		return
+	}
+
+	code := r.FormValue("code")
+	if code == "" {
+		SendError(w, apperror.BadRequest("Authorization code not found"))
+		return
+	}
+
+	cfg := getSSOConfig()
+	token, err := cfg.Exchange(context.Background(), code)
+	if err != nil {
+		SendError(w, apperror.Internal("Failed to exchange authorization code"))
+		return
+	}
+
+	// Tarik data profil/email dari Google API
+	client := cfg.Client(context.Background(), token)
+	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
+	if err != nil {
+		SendError(w, apperror.Internal("Failed to fetch user info from Google"))
+		return
+	}
+	defer resp.Body.Close()
+
+	var userInfo struct {
+		Email string `json:"email"`
+		Name  string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+		SendError(w, apperror.Internal("Failed to parse user info"))
+		return
+	}
+
+	// Serahin ke Usecase lu
+	accToken, refToken, err := h.usecase.LoginSSO(userInfo.Email, userInfo.Name)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	// Kirim token-nya ke frontend
+	utils.RespondWithJSON(w, http.StatusOK, "success", "SSO Login successful", map[string]interface{}{
+		"access_token":  accToken,
+		"refresh_token": refToken,
+	})
 }
