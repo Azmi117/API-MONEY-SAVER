@@ -74,4 +74,7 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	// --- OTP ROUTES ---
 	mux.HandleFunc("POST "+prefix+"auth/register/verify", aH.VerifyRegister) //done
 	mux.HandleFunc("POST "+prefix+"auth/otp/resend", aH.ResendOTP)           //done
+	mux.HandleFunc("POST "+prefix+"auth/login/verify", aH.VerifyLogin)       //done
+	mux.HandleFunc("POST "+prefix+"auth/forgot-password", aH.ForgotPasswordRequest)
+	mux.HandleFunc("POST "+prefix+"auth/forgot-password/verify", aH.ResetPassword)
 }
