@@ -126,6 +126,7 @@ func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
 	utils.RespondWithJSON(w, http.StatusCreated, "success", "Registration successful. Please verify your email.", nil)
 }
 
+// 1. REFACTOR: Handler Login utama (Step 1 - Cek Pass & trigger OTP)
 func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Email    string `json:"email"`
@@ -137,12 +138,42 @@ func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, refreshToken, err := h.usecase.Login(input.Email, input.Password)
+	// Panggil usecase login yang mengembalikan error saja
+	err := h.usecase.Login(input.Email, input.Password)
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
+	// Kirim response status 202 (Accepted) menandakan password benar & OTP dikirim
+	utils.RespondWithJSON(w, http.StatusAccepted, "success", "Password verified. An OTP security code has been sent to your email.", nil)
+}
+
+// 2. NEW HANDLER: Handler untuk verifikasi OTP Login (Step 2 - Tukar OTP ke JWT)
+func (h *authHandler) VerifyLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed. Please use POST."))
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+		Code  string `json:"code"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		SendError(w, apperror.BadRequest("Invalid JSON payload."))
+		return
+	}
+
+	// Jalankan verifikasi OTP khusus Login
+	accessToken, refreshToken, err := h.usecase.VerifyLoginOTP(req.Email, req.Code)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	// Setelah lolos verifikasi OTP, baru pasang Cookies JWT-nya di sini!
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    accessToken,
@@ -161,7 +192,7 @@ func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	utils.RespondWithJSON(w, http.StatusOK, "success", "Login successful", nil)
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Login verification successful. Welcome!", nil)
 }
 
 func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
@@ -361,4 +392,59 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		"access_token":  accToken,
 		"refresh_token": refToken,
 	})
+}
+
+// 1. Handler Minta OTP Lupa Password (POST /auth/forgot-password)
+func (h *authHandler) ForgotPasswordRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed"))
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		SendError(w, apperror.BadRequest("Invalid JSON"))
+		return
+	}
+
+	err := h.usecase.ForgotPasswordRequest(req.Email)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, "success", "OTP code for password reset has been sent to your email.", nil)
+}
+
+// 2. Handler Eksekusi Ganti Password (POST /auth/forgot-password/verify)
+func (h *authHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed"))
+		return
+	}
+
+	var req struct {
+		Email       string `json:"email"`
+		Code        string `json:"code"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		SendError(w, apperror.BadRequest("Invalid JSON payload"))
+		return
+	}
+
+	if len(req.NewPassword) < 6 {
+		SendError(w, apperror.BadRequest("Password must be at least 6 characters long"))
+		return
+	}
+
+	err := h.usecase.ResetPassword(req.Email, req.Code, req.NewPassword)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Your password has been successfully reset. Please log in with your new password.", nil)
 }

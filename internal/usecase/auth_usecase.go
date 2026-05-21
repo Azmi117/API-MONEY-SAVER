@@ -17,7 +17,7 @@ import (
 
 type AuthUsecase interface {
 	Register(user *models.User) error
-	Login(email, password string) (string, string, error)
+	Login(email, password string) error
 	RefreshToken(tokenString string) (string, error)
 	Logout(accessToken string, refreshToken string) error
 	randomString(length int) string
@@ -27,6 +27,9 @@ type AuthUsecase interface {
 	VerifyRegisterOTP(email string, code string) error
 	GetUserByEmail(email string) (*models.User, error)
 	LoginSSO(email string, name string) (string, string, error)
+	VerifyLoginOTP(email string, code string) (string, string, error)
+	ForgotPasswordRequest(email string) error
+	ResetPassword(email string, code string, newPassword string) error
 }
 
 type authUsecase struct {
@@ -74,32 +77,56 @@ func (u *authUsecase) Register(user *models.User) error {
 	return nil
 }
 
-func (u *authUsecase) Login(email, password string) (string, string, error) {
+// 1. REFACTOR: Method Login hanya untuk cek password & kirim OTP Login
+func (u *authUsecase) Login(email, password string) error {
 	existing, err := u.repo.FindByEmail(email)
 	if err != nil {
-		return "", "", apperror.NotFound("No account found with this email address")
+		return apperror.NotFound("No account found with this email address")
 	}
 
 	if err := utils.VerifyPassword(password, existing.PasswordHash); err != nil {
-		return "", "", apperror.Unauthorized("Invalid email or password")
+		return apperror.Unauthorized("Invalid email or password")
 	}
 
-	// =================================================================
-	// 🚨 SATPAM VERIFIKASI: Blokir kalau akun belum diaktifkan via OTP
-	// =================================================================
+	// Cek status verifikasi pendaftaran akun
 	if !existing.IsVerified {
-		// Lu bisa otomatis panggil resend OTP di sini biar UX lebih smooth
-		// u.SendOrResendOTP(existing.ID, existing.Email, "register")
-
-		return "", "", apperror.Forbidden("Account is not verified. Please check your email for the OTP code.")
+		return apperror.Forbidden("Account is not verified. Please check your email for the registration OTP code.")
 	}
-	// =================================================================
 
+	// Memicu pengiriman OTP khusus LOGIN
+	err = u.SendOrResendOTP(existing.ID, existing.Email, "login")
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// 2. NEW METHOD: Verifikasi OTP khusus login dan memproduksi JWT Tokens
+func (u *authUsecase) VerifyLoginOTP(email string, code string) (string, string, error) {
+	user, err := u.repo.FindByEmail(email)
+	if err != nil {
+		return "", "", apperror.NotFound("User not found.")
+	}
+
+	// Ambil OTP terakhir dengan tipe "login"
+	latestOTP, _ := u.otpRepo.FindLatestByUserID(user.ID, "login")
+	if latestOTP == nil || latestOTP.OTPCode != code {
+		return "", "", apperror.BadRequest("Invalid OTP code.")
+	}
+	if time.Now().After(latestOTP.ExpiresAt) {
+		return "", "", apperror.BadRequest("OTP code has expired.")
+	}
+
+	// OTP valid, hapus OTP-nya agar tidak bisa dipakai ulang
+	_ = u.otpRepo.DeleteByUserIDAndType(user.ID, "login")
+
+	// Pindahkan logic cetak JWT Token lu yang lama ke sini!
 	jSecret := os.Getenv("JWT_SECRET")
 	rSecret := os.Getenv("REFRESH_SECRET")
 
 	accessTokenClaims := jwt.MapClaims{
-		"user_id": existing.ID,
+		"user_id": user.ID,
 		"exp":     time.Now().Add(time.Minute * 15).Unix(),
 	}
 
@@ -109,12 +136,9 @@ func (u *authUsecase) Login(email, password string) (string, string, error) {
 		return "", "", apperror.Internal("Could not generate access token")
 	}
 
-	// =================================================================
-	// ⏳ REFRESH TOKEN 1 BULAN (30 Hari) SESUAI REQUEST LU
-	// =================================================================
 	refreshTokenClaims := jwt.MapClaims{
-		"user_id": existing.ID,
-		"exp":     time.Now().Add(time.Hour * 24 * 30).Unix(), // Diubah jadi 30 hari
+		"user_id": user.ID,
+		"exp":     time.Now().Add(time.Hour * 24 * 30).Unix(), // 30 Hari
 	}
 	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshTokenClaims)
 	refreshStr, err := refreshToken.SignedString([]byte(rSecret))
@@ -123,9 +147,9 @@ func (u *authUsecase) Login(email, password string) (string, string, error) {
 	}
 
 	rt := models.RefreshToken{
-		UserID:       existing.ID,
+		UserID:       user.ID,
 		RefreshToken: refreshStr,
-		ExpiresAt:    time.Now().Add(time.Hour * 24 * 30), // Diubah jadi 30 hari
+		ExpiresAt:    time.Now().Add(time.Hour * 24 * 30),
 	}
 
 	if err := u.repo.CreateRefreshToken(&rt); err != nil {
@@ -357,4 +381,50 @@ func (u *authUsecase) LoginSSO(email string, name string) (string, string, error
 	}
 
 	return accessStr, refreshStr, nil
+}
+
+// 1. Minta OTP Lupa Password
+func (u *authUsecase) ForgotPasswordRequest(email string) error {
+	user, err := u.repo.FindByEmail(email)
+	if err != nil {
+		// Demi keamanan/privacy, tetep return nil atau kasih pesan generik biar gak di-scan hacker
+		return apperror.NotFound("If the email is registered, an OTP code will be sent.")
+	}
+
+	// Kirim OTP khusus tipe "forgot_password"
+	return u.SendOrResendOTP(user.ID, user.Email, "forgot_password")
+}
+
+// 2. Eksekusi Reset Password Baru (Validasi OTP langsung ganti password)
+func (u *authUsecase) ResetPassword(email string, code string, newPassword string) error {
+	user, err := u.repo.FindByEmail(email)
+	if err != nil {
+		return apperror.NotFound("User not found.")
+	}
+
+	// Validasi OTP tipe "forgot_password"
+	latestOTP, _ := u.otpRepo.FindLatestByUserID(user.ID, "forgot_password")
+	if latestOTP == nil || latestOTP.OTPCode != code {
+		return apperror.BadRequest("Invalid OTP code.")
+	}
+	if time.Now().After(latestOTP.ExpiresAt) {
+		return apperror.BadRequest("OTP code has expired.")
+	}
+
+	// Hash password baru lu pake utils bawaan repo lu
+	hashedPassword, err := utils.HashPassword(newPassword)
+	if err != nil {
+		return apperror.Internal("Failed to process new password.")
+	}
+
+	// Update password di DB
+	user.PasswordHash = hashedPassword
+	if err := u.repo.Update(user); err != nil {
+		return apperror.Internal("Failed to update password.")
+	}
+
+	// Hapus OTP biar gak bisa di-reuse
+	_ = u.otpRepo.DeleteByUserIDAndType(user.ID, "forgot_password")
+
+	return nil
 }
