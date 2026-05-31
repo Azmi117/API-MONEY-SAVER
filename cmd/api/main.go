@@ -18,6 +18,7 @@ import (
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/ocr"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5" // Library Telegram
 	"github.com/joho/godotenv"
+	"github.com/rs/cors"
 )
 
 func main() {
@@ -131,10 +132,21 @@ func main() {
 	mux := http.NewServeMux()
 	delivery.MapRoutes(mux, authHandler, wsHandler, txHandler, debtHandler, categoryHandler, authRepo, db)
 
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:5173"}, // Sesuaikan sama port React lu
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true, // KUNCI UTAMA: Wajib true biar HTTPOnly Cookies JWT lu bisa nempel!
+		MaxAge:           300,
+	})
+
+	handler := c.Handler(mux)
+
 	port := ":8080"
 	log.Printf("🌍 Server running on port %s", port)
 
-	if err := http.ListenAndServe(port, mux); err != nil {
+	if err := http.ListenAndServe(port, handler); err != nil {
 		log.Fatalf("Failed running server: %v", err)
 	}
 }

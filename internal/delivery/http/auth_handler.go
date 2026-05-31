@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -35,14 +36,20 @@ func NewAuthHandler(params usecase.AuthUsecase, googleService service.GoogleAuth
 // --- GOOGLE OAUTH HANDLERS ---
 
 func (h *authHandler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
+	// 1. authMW bekerja sempurna di sini karena dipanggil via Axios
 	userID, ok := r.Context().Value("user_id").(uint)
 	if !ok {
 		SendError(w, apperror.Unauthorized("Invalid user session"))
 		return
 	}
 
+	// 2. Generate URL dari Service
 	url := h.googleAuthService.GetAuthURL(userID)
-	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+
+	// 3. JANGAN REDIRECT DARI SINI. Balikin sebagai JSON ke Frontend!
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Google Auth URL generated", map[string]string{
+		"url": url,
+	})
 }
 
 func (h *authHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
@@ -61,21 +68,26 @@ func (h *authHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1. Proses penukaran code dan update database
 	err = h.googleAuthService.ExchangeCode(r.Context(), userID, code)
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte("<h1>Success!</h1><p>Your Gmail account has been successfully linked.</p>"))
+	// 2. Redirect balik ke frontend (Profile Page)
+	// Asumsi FE lo jalan di port 5173 atau sesuaikan dengan base URL frontend lo
+	redirectURL := os.Getenv("FRONTEND_URL") + "/profile?sync=success"
+	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 }
 
 // --- EXISTING HANDLERS ---
 
 func (h *authHandler) Register(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		SendError(w, apperror.BadRequest("File size exceeds 5MB limit"))
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		// Log error-nya biar lu tau sebenernya kenapa
+		log.Printf("Error parsing form: %v", err)
+		SendError(w, apperror.BadRequest("Error parsing form data"))
 		return
 	}
 
@@ -139,8 +151,17 @@ func (h *authHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Panggil usecase login yang mengembalikan error saja
-	err := h.usecase.Login(input.Email, input.Password)
+	_, err := h.usecase.Login(input.Email, input.Password)
 	if err != nil {
+		if apperror.IsAccountNotVerified(err) {
+			// Ambil email dari error (atau custom struct error)
+			email := apperror.GetEmailFromError(err)
+			utils.RespondWithJSON(w, http.StatusForbidden, "error", "Not verified", map[string]interface{}{
+				"code":  "USER_NOT_VERIFIED",
+				"email": email,
+			})
+			return
+		}
 		SendError(w, err)
 		return
 	}
@@ -214,6 +235,7 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	utils.RespondWithJSON(w, http.StatusOK, "success", "Token successfully refreshed", nil)
@@ -362,7 +384,6 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Tarik data profil/email dari Google API
 	client := cfg.Client(context.Background(), token)
 	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
 	if err != nil {
@@ -380,18 +401,34 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Serahin ke Usecase lu
+	// Panggil Usecase SSO lu
 	accToken, refToken, err := h.usecase.LoginSSO(userInfo.Email, userInfo.Name)
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
-	// Kirim token-nya ke frontend
-	utils.RespondWithJSON(w, http.StatusOK, "success", "SSO Login successful", map[string]interface{}{
-		"access_token":  accToken,
-		"refresh_token": refToken,
+	// 👇 INI BAGIAN UTAMANYA: Set HttpOnly Cookies biar FE gak usah ribet nyimpen token 👇
+	http.SetCookie(w, &http.Cookie{
+		Name:     "access_token",
+		Value:    accToken,
+		HttpOnly: true,
+		Path:     "/",
+		Expires:  time.Now().Add(15 * time.Minute),
+		SameSite: http.SameSiteLaxMode, // Sesuaikan sama setting backend lu
 	})
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refToken,
+		HttpOnly: true,
+		Path:     "/",
+		Expires:  time.Now().Add(7 * 24 * time.Hour),
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	// LANGSUNG REDIRECT KE FRONTEND DASHBOARD
+	http.Redirect(w, r, "http://localhost:5173/dashboard", http.StatusSeeOther)
 }
 
 // 1. Handler Minta OTP Lupa Password (POST /auth/forgot-password)
@@ -447,4 +484,22 @@ func (h *authHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondWithJSON(w, http.StatusOK, "success", "Your password has been successfully reset. Please log in with your new password.", nil)
+}
+
+func (h *authHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
+	// Ambil dari context (sesuai middleware lu)
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
+
+	// Panggil usecase, bukan langsung repo!
+	user, err := h.usecase.FindByID(uint(userID))
+	if err != nil {
+		SendError(w, apperror.NotFound("User not found"))
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Profile retrieved", user)
 }
