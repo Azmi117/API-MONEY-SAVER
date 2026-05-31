@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/mail"
 	"os"
@@ -99,23 +100,46 @@ func (h *TransactionHandler) GetHistory(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	history, err := h.usecase.GetHistory(uint(workspaceID))
+	// 1. Ambil Query Param "page" dan "limit" untuk pagination
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || page <= 0 {
+		page = 1 // Default page
+	}
+
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil || limit <= 0 {
+		limit = 10 // Default limit
+	}
+
+	// 2. Panggil Usecase dengan parameter baru (nangkep totalItems juga)
+	history, totalItems, err := h.usecase.GetHistory(uint(workspaceID), page, limit)
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
+	// 3. Hitung total halaman (butuh package "math")
+	totalPages := int(math.Ceil(float64(totalItems) / float64(limit)))
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
+	// 4. Update struct response buat nampung Meta data
 	response := struct {
 		StatusCode int         `json:"status_code"`
 		Message    string      `json:"message"`
 		Data       interface{} `json:"data"`
+		Meta       interface{} `json:"meta"` // Tambahan Meta buat Load More FE
 	}{
 		StatusCode: http.StatusOK,
 		Message:    "Transaction history retrieved successfully",
 		Data:       history,
+		Meta: map[string]interface{}{
+			"page":        page,
+			"limit":       limit,
+			"total_items": totalItems,
+			"total_pages": totalPages,
+		},
 	}
 
 	json.NewEncoder(w).Encode(response)
@@ -491,6 +515,67 @@ func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request)
 		StatusCode: http.StatusCreated,
 		Message:    "Transaction confirmed and saved",
 		Data:       transaction,
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// 12. GET /workspaces/{id}/pending-transactions
+func (h *TransactionHandler) GetPendingTransactions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use GET"))
+		return
+	}
+
+	// Ambil Workspace ID dari Path Parameter
+	idStr := r.PathValue("id")
+	workspaceID, _ := strconv.Atoi(idStr)
+
+	if workspaceID == 0 {
+		SendError(w, apperror.BadRequest("Invalid workspace ID"))
+		return
+	}
+
+	// 1. Ambil Query Param "page" dan "limit"
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || page <= 0 {
+		page = 1 // Default page
+	}
+
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil || limit <= 0 {
+		limit = 10 // Default limit
+	}
+
+	// 2. Tembak Usecase buat narik data
+	pendings, totalItems, err := h.pendingUsecase.GetPendingTransactions(uint(workspaceID), page, limit)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	// 3. Hitung total halaman
+	totalPages := int(math.Ceil(float64(totalItems) / float64(limit)))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	// 4. Return Data + Meta Pagination
+	response := struct {
+		StatusCode int         `json:"status_code"`
+		Message    string      `json:"message"`
+		Data       interface{} `json:"data"`
+		Meta       interface{} `json:"meta"`
+	}{
+		StatusCode: http.StatusOK,
+		Message:    "Pending transactions retrieved successfully",
+		Data:       pendings,
+		Meta: map[string]interface{}{
+			"page":        page,
+			"limit":       limit,
+			"total_items": totalItems,
+			"total_pages": totalPages,
+		},
 	}
 
 	json.NewEncoder(w).Encode(response)

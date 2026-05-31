@@ -23,7 +23,7 @@ import (
 type TransactionUsecase interface {
 	CreateManual(ctx context.Context, userID uint, req dto.CreateTransactionRequest) (*models.Transaction, *dto.BudgetStatusResponse, error)
 	ConfirmTransaction(ctx context.Context, pendingID uint) (*models.Transaction, *dto.BudgetStatusResponse, error)
-	GetHistory(workspaceID uint) ([]models.Transaction, error)
+	GetHistory(workspaceID uint, page int, limit int) ([]models.Transaction, int64, error)
 	DeleteTransaction(ctx context.Context, transactionID uint, userID uint) error
 	ProcessScanHybrid2(ctx context.Context, userID uint, workspaceID uint, imgData []byte, mimeType string) (*dto.ProcessScanHybridResult, uint, error)
 	HardDeleteTransaction(id uint) error
@@ -294,8 +294,8 @@ func (u *transactionUsecase) ConfirmTransaction(ctx context.Context, pendingID u
 	return &tx, budgetData, nil
 }
 
-func (u *transactionUsecase) GetHistory(workspaceID uint) ([]models.Transaction, error) {
-	return u.repo.GetByWorkspaceID(workspaceID)
+func (u *transactionUsecase) GetHistory(workspaceID uint, page int, limit int) ([]models.Transaction, int64, error) {
+	return u.repo.GetByWorkspaceID(workspaceID, page, limit)
 }
 
 func (u *transactionUsecase) DeleteTransaction(ctx context.Context, transactionID uint, userID uint) error {

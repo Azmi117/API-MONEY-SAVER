@@ -3,8 +3,9 @@ package apperror
 import "net/http"
 
 type Apperror struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
 }
 
 func (e *Apperror) Error() string {
@@ -81,4 +82,38 @@ func TooManyRequests(msg string) error {
 		Code:    http.StatusTooManyRequests,
 		Message: msg,
 	}
+}
+
+func AccountNotVerified(msg string, email string) error {
+	return &Apperror{
+		Code:    http.StatusForbidden,
+		Message: msg,
+		Data: map[string]interface{}{
+			"code":  "USER_NOT_VERIFIED",
+			"email": email,
+		},
+	}
+}
+
+func IsAccountNotVerified(err error) bool {
+	ae, ok := err.(*Apperror)
+	if !ok {
+		return false
+	}
+	// Cek apakah data di dalamnya punya code USER_NOT_VERIFIED
+	if data, ok := ae.Data.(map[string]interface{}); ok {
+		return data["code"] == "USER_NOT_VERIFIED"
+	}
+	return false
+}
+
+// Helper untuk ngambil email dari error
+func GetEmailFromError(err error) string {
+	ae := err.(*Apperror)
+	if data, ok := ae.Data.(map[string]interface{}); ok {
+		if email, ok := data["email"].(string); ok {
+			return email
+		}
+	}
+	return ""
 }

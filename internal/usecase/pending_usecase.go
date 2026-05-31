@@ -19,6 +19,7 @@ type PendingUsecase interface {
 	ApproveEmailLog(ctx context.Context, logID uint, userID uint) error
 	RejectEmailLog(ctx context.Context, logID uint, userID uint) error
 	ConfirmEmailTransaction(ctx context.Context, userID uint, req dto.ConfirmEmailRequest) (*dto.BudgetStatusResponse, error) // UPDATE: return DTO
+	GetPendingTransactions(workspaceID uint, page int, limit int) ([]models.PendingTransaction, int64, error)
 }
 
 type pendingUsecase struct {
@@ -191,4 +192,9 @@ func (u *pendingUsecase) ConfirmEmailTransaction(ctx context.Context, userID uin
 	}
 
 	return budgetData, nil
+}
+
+func (u *pendingUsecase) GetPendingTransactions(workspaceID uint, page int, limit int) ([]models.PendingTransaction, int64, error) {
+	// Tinggal pass atau terusin aja parameter dari handler ke repository
+	return u.pendingRepo.GetPendingList(workspaceID, page, limit)
 }

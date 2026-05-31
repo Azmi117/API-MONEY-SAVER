@@ -28,6 +28,7 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("POST "+prefix+"auth/logout", authMW(aH.Logout)) //done
 	mux.HandleFunc("GET "+prefix+"auth/sso/google/login", aH.GoogleSSOLogin)
 	mux.HandleFunc("GET "+prefix+"auth/sso/google/callback", aH.GoogleSSOCallback)
+	mux.HandleFunc("GET "+prefix+"auth/profile", authMW(aH.GetProfile))
 
 	// --- TELEGRAM BINDING ROUTE ---
 	mux.HandleFunc("GET "+prefix+"auth/telegram/binding-code", authMW(aH.GetBindingCode)) //done
@@ -50,13 +51,14 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("POST "+prefix+"workspaces/invitations/{id}/reject", authMW(wH.RejectInvitation)) //done
 
 	// --- TRANSACTION ROUTES ---
-	mux.HandleFunc("POST "+prefix+"transactions/manual", authMW(tH.CreateManual))                 //done
-	mux.HandleFunc("GET "+prefix+"workspaces/{id}/transactions", authMW(memberMW(tH.GetHistory))) //done
-	mux.HandleFunc("DELETE "+prefix+"transactions/{id}", authMW(tH.Delete))                       //done
-	mux.HandleFunc("PATCH "+prefix+"transactions/{id}/confirm", authMW(tH.Confirm))               //done
-	mux.HandleFunc("POST "+prefix+"transactions/scan-hybrid2", authMW(tH.ScanReceiptHybrid))      //done
-	mux.HandleFunc("POST "+prefix+"transactions/scan-alt", authMW(tH.ScanAlternative))            //done
-	mux.HandleFunc("POST "+prefix+"transactions/scan-alt/confirm", authMW(tH.ConfirmScan))        //done
+	mux.HandleFunc("POST "+prefix+"transactions/manual", authMW(tH.CreateManual))                                     //done
+	mux.HandleFunc("GET "+prefix+"workspaces/{id}/transactions", authMW(memberMW(tH.GetHistory)))                     //done
+	mux.HandleFunc("DELETE "+prefix+"transactions/{id}", authMW(tH.Delete))                                           //done
+	mux.HandleFunc("GET "+prefix+"workspaces/{id}/pending-transactions", authMW(memberMW(tH.GetPendingTransactions))) //done
+	mux.HandleFunc("PATCH "+prefix+"transactions/{id}/confirm", authMW(tH.Confirm))                                   //done
+	mux.HandleFunc("POST "+prefix+"transactions/scan-hybrid2", authMW(tH.ScanReceiptHybrid))                          //done
+	mux.HandleFunc("POST "+prefix+"transactions/scan-alt", authMW(tH.ScanAlternative))                                //done
+	mux.HandleFunc("POST "+prefix+"transactions/scan-alt/confirm", authMW(tH.ConfirmScan))                            //done
 
 	// --- PENDING & EMAIL ROUTES ---
 	mux.HandleFunc("GET "+prefix+"emails/pending", authMW(tH.GetPendingEmails))   //done

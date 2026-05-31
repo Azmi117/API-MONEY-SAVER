@@ -3,6 +3,7 @@ package usecase
 import (
 	cryptoRand "crypto/rand"
 	"fmt"
+	"log"
 	"math/big"
 	"math/rand"
 	"os"
@@ -17,7 +18,7 @@ import (
 
 type AuthUsecase interface {
 	Register(user *models.User) error
-	Login(email, password string) error
+	Login(email, password string) (*models.User, error)
 	RefreshToken(tokenString string) (string, error)
 	Logout(accessToken string, refreshToken string) error
 	randomString(length int) string
@@ -30,6 +31,7 @@ type AuthUsecase interface {
 	VerifyLoginOTP(email string, code string) (string, string, error)
 	ForgotPasswordRequest(email string) error
 	ResetPassword(email string, code string, newPassword string) error
+	FindByID(id uint) (*models.User, error)
 }
 
 type authUsecase struct {
@@ -77,29 +79,36 @@ func (u *authUsecase) Register(user *models.User) error {
 	return nil
 }
 
+func (u *authUsecase) FindByID(id uint) (*models.User, error) {
+	// Lu bisa tambahin logika validasi di sini kalau perlu,
+	// misalnya cek apakah user aktif atau kena banned
+	return u.repo.FindByID(id)
+}
+
 // 1. REFACTOR: Method Login hanya untuk cek password & kirim OTP Login
-func (u *authUsecase) Login(email, password string) error {
+func (u *authUsecase) Login(email, password string) (*models.User, error) {
 	existing, err := u.repo.FindByEmail(email)
 	if err != nil {
-		return apperror.NotFound("No account found with this email address")
+		return nil, apperror.NotFound("No account found with this email address")
 	}
 
 	if err := utils.VerifyPassword(password, existing.PasswordHash); err != nil {
-		return apperror.Unauthorized("Invalid email or password")
+		return nil, apperror.Unauthorized("Invalid email or password")
 	}
 
 	// Cek status verifikasi pendaftaran akun
 	if !existing.IsVerified {
-		return apperror.Forbidden("Account is not verified. Please check your email for the registration OTP code.")
+		// Return error khusus yang nanti bakal ditangkep handler
+		return nil, apperror.AccountNotVerified("Account not verified", existing.Email)
 	}
 
 	// Memicu pengiriman OTP khusus LOGIN
 	err = u.SendOrResendOTP(existing.ID, existing.Email, "login")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return existing, nil
 }
 
 // 2. NEW METHOD: Verifikasi OTP khusus login dan memproduksi JWT Tokens
@@ -285,7 +294,9 @@ func (u *authUsecase) SendOrResendOTP(userID uint, email string, otpType string)
 	go func() {
 		subject := "Your OTP Code - Money Saver"
 		body := fmt.Sprintf("<h1>Your OTP Code is: <b>%s</b></h1><p>It will expire in 5 minutes.</p>", code)
-		_ = utils.SendEmail(email, subject, body)
+		if err := utils.SendEmail(email, subject, body); err != nil {
+			log.Printf("Failed to send OTP email to %s: %v", email, err)
+		}
 	}()
 
 	return nil

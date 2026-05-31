@@ -5,6 +5,7 @@ import (
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/dto"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
+	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/utils"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -14,7 +15,7 @@ type TransactionRepository interface {
 	Create(transaction *models.Transaction) error
 	IsDuplicate(workspaceID uint, amount float64, merchant string, date time.Time) (bool, error)
 	UpdateStatus(id uint, status string) error
-	GetByWorkspaceID(workspaceID uint) ([]models.Transaction, error)
+	GetByWorkspaceID(workspaceID uint, page int, limit int) ([]models.Transaction, int64, error)
 	Delete(id uint) error
 	GetByGmailID(gmailID string) (*models.Transaction, error)
 	HardDelete(id uint) error
@@ -80,11 +81,25 @@ func (r *transactionRepository) UpdateStatus(id uint, status string) error {
 	return r.db.Model(&models.Transaction{}).Where("id = ?", id).Update("status", status).Error
 }
 
-func (r *transactionRepository) GetByWorkspaceID(workspaceID uint) ([]models.Transaction, error) {
+func (r *transactionRepository) GetByWorkspaceID(workspaceID uint, page int, limit int) ([]models.Transaction, int64, error) {
 	var transactions []models.Transaction
-	// Order by most recent
-	err := r.db.Where("workspace_id = ?", workspaceID).Order("date desc").Find(&transactions).Error
-	return transactions, err
+	var totalItems int64
+
+	// 1. Hitung total data dulu buat dikirim ke meta response (buat patokan tombol Load More di FE)
+	err := r.db.Model(&models.Transaction{}).
+		Where("workspace_id = ?", workspaceID).
+		Count(&totalItems).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 2. Tarik datanya pake utils.Paginate yang tadi kita bikin
+	err = r.db.Scopes(utils.Paginate(page, limit)).
+		Where("workspace_id = ?", workspaceID).
+		Order("date desc").
+		Find(&transactions).Error
+
+	return transactions, totalItems, err
 }
 
 func (r *transactionRepository) Delete(id uint) error {
