@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/dto"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/usecase"
@@ -230,4 +231,25 @@ func (h *WorkspaceHandler) GetMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondWithJSON(w, http.StatusOK, "success", "Workspace members retrieved successfully", members)
+}
+func (h *WorkspaceHandler) GetSummary(w http.ResponseWriter, r *http.Request) {
+	// Ambil ID dari URL (asumsi lu pake routing yang support parameter)
+	// Kalau lu pake mux standar, bisa pake r.URL.Path atau library mux
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/v1/workspaces/")
+	idStr = strings.TrimSuffix(idStr, "/summary")
+	id, _ := strconv.Atoi(idStr)
+
+	summary, err := h.usecase.GetWorkspaceSummary(id)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Gagal"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status_code": 200,
+		"message":     "Summary retrieved",
+		"data":        summary,
+	})
 }

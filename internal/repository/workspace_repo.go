@@ -26,6 +26,8 @@ type WorkspaceRepository interface {
 	GetByTelegramChatID(chatID int64) (*models.Workspace, error)
 	IsMember(workspaceID uint, userID uint) (bool, error)
 	GetMembersByWorkspaceID(workspaceID uint) ([]models.WorkspaceMember, error)
+	CalculateSummary(workspaceID int) (map[string]float64, error)
+	GetBudgetByWorkspace(workspaceID int, period string) (float64, float64, error)
 }
 
 type workspaceRepository struct {
@@ -173,4 +175,49 @@ func (r *workspaceRepository) GetMembersByWorkspaceID(workspaceID uint) ([]model
 	var members []models.WorkspaceMember
 	err := r.db.Preload("User").Where("workspace_id = ?", workspaceID).Find(&members).Error
 	return members, err
+}
+func (r *workspaceRepository) CalculateSummary(workspaceID int) (map[string]float64, error) {
+	var result struct {
+		TotalIncome  float64
+		TotalExpense float64
+	}
+
+	// Query tetap sama
+	err := r.db.Model(&models.Transaction{}).
+		Where("workspace_id = ? AND deleted_at IS NULL", workspaceID).
+		Select("SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as total_income, " +
+			"SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expense").
+		Scan(&result).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Bungkus ke map
+	summary := map[string]float64{
+		"total_balance":   result.TotalIncome - result.TotalExpense,
+		"total_income":    result.TotalIncome,
+		"total_expense":   result.TotalExpense,
+		"savings_target":  10000000, // Hardcode sementara
+		"savings_current": (result.TotalIncome - result.TotalExpense) * 0.3,
+		"budget_limit":    5000000,
+		"budget_spent":    result.TotalExpense,
+	}
+
+	return summary, nil
+}
+
+func (r *workspaceRepository) GetBudgetByWorkspace(workspaceID int, period string) (float64, float64, error) {
+	var t struct {
+		AmountLimit   float64 `gorm:"column:amount_limit"`
+		SavingsTarget float64 `gorm:"column:savings_target"`
+	}
+
+	// GANTI KE TABEL 'targets' SESUAI SCREENSHOT LU
+	err := r.db.Table("targets").
+		Select("amount_limit, savings_target").
+		Where("workspace_id = ? AND period = ?", workspaceID, period).
+		Scan(&t).Error
+
+	return t.AmountLimit, t.SavingsTarget, err
 }

@@ -24,6 +24,7 @@ type WorkspaceUsecase interface {
 	GetUserWorkspaceList(telegramUserID int64) (string, error)
 	CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64, wsType string) (*models.Workspace, error)
 	GetMembers(workspaceID uint) ([]models.WorkspaceMember, error)
+	GetWorkspaceSummary(workspaceID int) (map[string]float64, error)
 }
 
 type workspaceUsecase struct {
@@ -272,4 +273,30 @@ func (u *workspaceUsecase) CreateFromTelegram(ctx context.Context, telegramID in
 
 func (u *workspaceUsecase) GetMembers(workspaceID uint) ([]models.WorkspaceMember, error) {
 	return u.workspaceRepo.GetMembersByWorkspaceID(workspaceID)
+}
+
+func (u *workspaceUsecase) GetWorkspaceSummary(workspaceID int) (map[string]float64, error) {
+	// 1. Ambil data transaksinya
+	data, err := u.workspaceRepo.CalculateSummary(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Ambil data budget & target (tanpa bikin model baru!)
+	limit, target, err := u.workspaceRepo.GetBudgetByWorkspace(workspaceID, "2026-05")
+	if err != nil {
+		fmt.Printf("Error narik target buat WS %d: %v\n", workspaceID, err)
+		limit, target = 0, 0 // Fallback kalau gak ada data
+	}
+
+	// 3. Gabungin ke map
+	return map[string]float64{
+		"total_balance":   data["balance"],
+		"total_income":    data["total_income"],
+		"total_expense":   data["total_expense"],
+		"savings_target":  target,
+		"savings_current": data["balance"] * 0.3,
+		"budget_limit":    limit,
+		"budget_spent":    data["total_expense"],
+	}, nil
 }
