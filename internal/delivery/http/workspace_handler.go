@@ -253,3 +253,41 @@ func (h *WorkspaceHandler) GetSummary(w http.ResponseWriter, r *http.Request) {
 		"data":        summary,
 	})
 }
+
+// GET PENDING INVITATIONS
+func (h *WorkspaceHandler) GetPendingInvitations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed"))
+		return
+	}
+
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
+
+	invitations, err := h.usecase.GetPendingInvitations(userID)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	// Mapping ke format response yang siap dimakan Frontend
+	var response []map[string]interface{}
+	for _, inv := range invitations {
+		response = append(response, map[string]interface{}{
+			"id":            inv.ID,
+			"workspaceName": inv.Workspace.Name, // Asumsi Repo lu udah nge-Preload Workspace
+			"sender":        inv.Inviter.Name,   // Asumsi Repo lu udah nge-Preload Inviter (User)
+			"status":        inv.Status,
+		})
+	}
+
+	// Biar gak return null kalau kosong, kita return array kosong []
+	if response == nil {
+		response = []map[string]interface{}{}
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Pending invitations retrieved", response)
+}

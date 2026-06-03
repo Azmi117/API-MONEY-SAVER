@@ -47,6 +47,7 @@ func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler,
 	mux.HandleFunc("GET /api/v1/workspaces/{id}/summary", authMW(wH.GetSummary))
 
 	// --- INVITATION ROUTES ---
+	mux.HandleFunc("GET "+prefix+"workspaces/invitations/pending", authMW(wH.GetPendingInvitations))
 	mux.HandleFunc("POST "+prefix+"workspaces/{id}/invite", authMW(wH.Invite))                       //done
 	mux.HandleFunc("POST "+prefix+"workspaces/invitations/{id}/accept", authMW(wH.AcceptInvitation)) //done
 	mux.HandleFunc("POST "+prefix+"workspaces/invitations/{id}/reject", authMW(wH.RejectInvitation)) //done
