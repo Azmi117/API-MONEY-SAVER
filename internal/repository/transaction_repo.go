@@ -33,6 +33,7 @@ type TransactionRepository interface {
 	GetSummaryByWorkspace(workspaceID uint, txType string, month string) ([]dto.UserTransactionSummary, error)
 	GetTotalByWorkspace(workspaceID uint, txType string, month string) (float64, error)
 	CreateWithItems(transaction *models.Transaction) error
+	GetAllByWorkspaceID(workspaceID uint, month string) ([]models.Transaction, error)
 }
 
 type transactionRepository struct {
@@ -95,6 +96,7 @@ func (r *transactionRepository) GetByWorkspaceID(workspaceID uint, page int, lim
 
 	// 2. Tarik datanya pake utils.Paginate yang tadi kita bikin
 	err = r.db.Scopes(utils.Paginate(page, limit)).
+		Preload("TransactionItems"). // ✨ TAMBAHIN INI BIAR ITEMNYA KETARIK! ✨
 		Where("workspace_id = ?", workspaceID).
 		Order("date desc").
 		Find(&transactions).Error
@@ -222,4 +224,19 @@ func (r *transactionRepository) GetTotalByWorkspace(workspaceID uint, txType str
 		Select("COALESCE(SUM(amount), 0)").
 		Scan(&total).Error
 	return total, err
+}
+
+func (r *transactionRepository) GetAllByWorkspaceID(workspaceID uint, month string) ([]models.Transaction, error) {
+	var transactions []models.Transaction
+
+	query := r.db.Where("workspace_id = ?", workspaceID)
+
+	// Kalau parameternya dikirim (gak kosong), filter by bulan
+	// Format month dari input HTML5 type="month" itu "YYYY-MM"
+	if month != "" {
+		query = query.Where("TO_CHAR(date, 'YYYY-MM') = ?", month)
+	}
+
+	err := query.Order("date desc").Find(&transactions).Error
+	return transactions, err
 }

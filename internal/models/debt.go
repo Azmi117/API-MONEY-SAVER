@@ -16,6 +16,6 @@ type Debt struct {
 
 	// Relationships
 	Workspace Workspace `gorm:"foreignKey:WorkspaceID" json:"-"`
-	FromUser  User      `gorm:"foreignKey:FromUserID" json:"-"`
-	ToUser    User      `gorm:"foreignKey:ToUserID" json:"-"`
+	FromUser  User      `gorm:"foreignKey:FromUserID" json:"from_user"`
+	ToUser    User      `gorm:"foreignKey:ToUserID" json:"to_user"`
 }

@@ -11,7 +11,7 @@ import (
 )
 
 type WorkspaceUsecase interface {
-	CreateWorkspace(name string, ownerID uint) (*models.Workspace, error)
+	CreateWorkspace(name string, workspaceType string, ownerID uint) (*models.Workspace, error)
 	GetUserWorkspaces(userID uint) ([]models.Workspace, error)
 	UpdateWorkspace(workspaceID uint, userID uint, newName string) error
 	DeleteWorkspace(workspaceID uint, userID uint) error
@@ -63,13 +63,27 @@ func (u *workspaceUsecase) checkWorkspaceLimit(userID uint) error {
 }
 
 // 1. CREATE WORKSPACE
-func (u *workspaceUsecase) CreateWorkspace(name string, ownerID uint) (*models.Workspace, error) {
+func (u *workspaceUsecase) CreateWorkspace(name string, workspaceType string, ownerID uint) (*models.Workspace, error) {
 	// FIX: Panggil helper method biar rapi
 	if err := u.checkWorkspaceLimit(ownerID); err != nil {
 		return nil, err
 	}
 
-	workspace := &models.Workspace{Name: name, OwnerID: ownerID}
+	// Default & Validasi tipe workspace
+	if workspaceType == "" {
+		workspaceType = "budgeting" // Default ke budgeting
+	}
+	if workspaceType != "budgeting" && workspaceType != "split" {
+		return nil, apperror.BadRequest("Tipe workspace harus 'budgeting' atau 'split'")
+	}
+
+	// Masukin type ke struct model
+	workspace := &models.Workspace{
+		Name:    name,
+		Type:    workspaceType, // <-- TAMBAHAN BARU
+		OwnerID: ownerID,
+	}
+
 	if err := u.workspaceRepo.Create(workspace); err != nil {
 		return nil, apperror.Internal("Failed to create workspace")
 	}

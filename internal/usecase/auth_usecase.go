@@ -32,6 +32,7 @@ type AuthUsecase interface {
 	ForgotPasswordRequest(email string) error
 	ResetPassword(email string, code string, newPassword string) error
 	FindByID(id uint) (*models.User, error)
+	UpdateProfile(userID uint, name string, avatar string) error
 }
 
 type authUsecase struct {
@@ -438,4 +439,12 @@ func (u *authUsecase) ResetPassword(email string, code string, newPassword strin
 	_ = u.otpRepo.DeleteByUserIDAndType(user.ID, "forgot_password")
 
 	return nil
+}
+
+func (u *authUsecase) UpdateProfile(userID uint, name string, avatar string) error {
+	if name == "" {
+		return apperror.BadRequest("Nama nggak boleh kosong")
+	}
+
+	return u.repo.UpdateProfile(userID, name, avatar)
 }

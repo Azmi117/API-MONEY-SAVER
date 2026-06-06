@@ -7,8 +7,10 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/generative-ai-go v0.14.0
 	github.com/jaytaylor/html2text v0.0.0-20260303211410-1a4bdc82ecec
+	github.com/johnfercher/maroto v1.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/matthewhartstonge/argon2 v1.5.0
+	github.com/rs/cors v1.11.1
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.275.0
 	gopkg.in/gomail.v2 v2.0.0-20160411212932-81ebce5c23df
@@ -23,6 +25,7 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/longrunning v0.8.0 // indirect
+	github.com/boombuler/barcode v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clipperhouse/displaywidth v0.10.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.6.0 // indirect
@@ -40,6 +43,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
+	github.com/jung-kurt/gofpdf v1.16.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.19 // indirect
@@ -47,7 +51,7 @@ require (
 	github.com/olekukonko/errors v1.2.0 // indirect
 	github.com/olekukonko/ll v0.1.6 // indirect
 	github.com/olekukonko/tablewriter v1.1.4 // indirect
-	github.com/rs/cors v1.11.1 // indirect
+	github.com/ruudk/golang-pdf417 v0.0.0-20201230142125-a7e3863a1245 // indirect
 	github.com/ssor/bom v0.0.0-20170718123548-6386211fdfcf // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.67.0 // indirect

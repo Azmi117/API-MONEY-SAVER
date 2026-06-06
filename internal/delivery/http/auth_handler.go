@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -502,4 +503,79 @@ func (h *authHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondWithJSON(w, http.StatusOK, "success", "Profile retrieved", user)
+}
+
+func (h *authHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use PUT"))
+		return
+	}
+
+	// 1. Ambil UserID dari middleware
+	userID, ok := r.Context().Value("user_id").(uint)
+	if !ok {
+		SendError(w, apperror.Unauthorized("Invalid user session"))
+		return
+	}
+
+	// 2. Parse Multipart Form (Max size 5 MB)
+	err := r.ParseMultipartForm(5 << 20)
+	if err != nil {
+		SendError(w, apperror.BadRequest("File terlalu besar atau format form tidak valid"))
+		return
+	}
+
+	name := r.FormValue("name")
+	if name == "" {
+		SendError(w, apperror.BadRequest("Nama tidak boleh kosong"))
+		return
+	}
+
+	// 3. Handle File Upload (Opsional, karena user bisa aja cuma ganti nama)
+	var avatarURL string
+	file, header, err := r.FormFile("avatar")
+	if err == nil { // Kalau nggak ada error, berarti ada file yang diupload
+		defer file.Close()
+
+		// Bikin folder "uploads/avatars" kalau belum ada (Permission 0755)
+		os.MkdirAll("./uploads/avatars", os.ModePerm)
+
+		// Generate nama file unik biar nggak bentrok (Contoh: 1_1708899.jpg)
+		ext := filepath.Ext(header.Filename)
+		filename := fmt.Sprintf("%d_%d%s", userID, time.Now().Unix(), ext)
+		savePath := filepath.Join(".", "uploads", "avatars", filename)
+
+		// Bikin file kosong di folder tersebut
+		dst, err := os.Create(savePath)
+		if err != nil {
+			SendError(w, apperror.Internal("Gagal menyimpan file gambar"))
+			return
+		}
+		defer dst.Close()
+
+		// Copy isi file dari memori ke file di hardisk
+		if _, err := io.Copy(dst, file); err != nil {
+			SendError(w, apperror.Internal("Gagal menyalin file gambar"))
+			return
+		}
+
+		// Simpen path relatifnya ke database. Karena lu udah punya route "/uploads/"
+		// di routes.go, frontend nanti bakal bisa akses gambar ini.
+		avatarURL = "http://localhost:8080/uploads/avatars/" + filename
+	}
+
+	// 4. Panggil Usecase buat simpen ke DB
+	err = h.usecase.UpdateProfile(userID, name, avatarURL)
+	if err != nil {
+		SendError(w, err)
+		return
+	}
+
+	// 5. Balikin Response
+	responseData := map[string]string{"name": name}
+	if avatarURL != "" {
+		responseData["avatar"] = avatarURL
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, "success", "Profil berhasil diupdate", responseData)
 }

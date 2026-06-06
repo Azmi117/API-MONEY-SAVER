@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,11 +19,15 @@ import (
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/gemini"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/ocr"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/utils"
+	"github.com/johnfercher/maroto/pkg/color"
+	"github.com/johnfercher/maroto/pkg/consts"
+	"github.com/johnfercher/maroto/pkg/pdf"
+	"github.com/johnfercher/maroto/pkg/props"
 )
 
 type TransactionUsecase interface {
 	CreateManual(ctx context.Context, userID uint, req dto.CreateTransactionRequest) (*models.Transaction, *dto.BudgetStatusResponse, error)
-	ConfirmTransaction(ctx context.Context, pendingID uint) (*models.Transaction, *dto.BudgetStatusResponse, error)
+	ConfirmTransaction(ctx context.Context, pendingID uint, req dto.ConfirmTransactionRequest) (*models.Transaction, *dto.BudgetStatusResponse, error)
 	GetHistory(workspaceID uint, page int, limit int) ([]models.Transaction, int64, error)
 	DeleteTransaction(ctx context.Context, transactionID uint, userID uint) error
 	ProcessScanHybrid2(ctx context.Context, userID uint, workspaceID uint, imgData []byte, mimeType string) (*dto.ProcessScanHybridResult, uint, error)
@@ -30,6 +35,7 @@ type TransactionUsecase interface {
 	ProcessScanAlternative(ctx context.Context, imagePath string, userID uint, workspaceID uint) (*dto.ProcessScanHybridResult, uint, error)
 	ConfirmScanTransaction(ctx context.Context, tx *models.Transaction, items []models.TransactionItem) (*dto.BudgetStatusResponse, error)
 	ProcessTelegramInput(ctx context.Context, msg string) (string, bool, float64)
+	ExportTransactionsPDF(ctx context.Context, workspaceID uint, month string) (*bytes.Buffer, error)
 }
 
 type transactionUsecase struct {
@@ -120,7 +126,7 @@ func (u *transactionUsecase) CreateManual(ctx context.Context, userID uint, req 
 		Method:      req.Method,
 		Source:      req.Source,
 		Status:      "approved",
-		GmailID:     fakeGmailID,
+		GmailID:     utils.NullableString(fmt.Sprintf("SCAN-ALT-%d-%d", userID, time.Now().UnixNano())),
 	}
 
 	// 6. Simpan ke Database
@@ -193,7 +199,7 @@ func (u *transactionUsecase) ProcessScanHybrid2(ctx context.Context, userID uint
 		Type:             result.Type,
 		Source:           "scan_hybrid",
 		Status:           "pending",
-		GmailID:          fmt.Sprintf("SCAN-%d", time.Now().UnixNano()),
+		GmailID:          utils.NullableString(fmt.Sprintf("SCAN-ALT-%d-%d", userID, time.Now().UnixNano())),
 		TransactionItems: []models.TransactionItem{},
 	}
 
@@ -255,8 +261,7 @@ func (u *transactionUsecase) checkAndResetQuota(user *models.User) error {
 	return nil
 }
 
-func (u *transactionUsecase) ConfirmTransaction(ctx context.Context, pendingID uint) (*models.Transaction, *dto.BudgetStatusResponse, error) {
-	// FIX: Pake method FindByID dari repository lu, balikan aslinya (*models.PendingTransaction, error)
+func (u *transactionUsecase) ConfirmTransaction(ctx context.Context, pendingID uint, req dto.ConfirmTransactionRequest) (*models.Transaction, *dto.BudgetStatusResponse, error) {
 	pending, err := u.pendingRepo.FindByID(pendingID)
 	if err != nil || pending == nil {
 		return nil, nil, apperror.NotFound("Pending transaction not found")
@@ -271,8 +276,34 @@ func (u *transactionUsecase) ConfirmTransaction(ctx context.Context, pendingID u
 		return nil, nil, apperror.Internal("Failed to parse pending data")
 	}
 
+	// ✨ TIMPA DATA LAMA DENGAN HASIL EDITAN DARI FRONTEND ✨
+	parsedDate, err := time.Parse(time.RFC3339, req.Date)
+	if err != nil {
+		parsedDate, _ = time.Parse("2006-01-02", req.Date)
+	}
+
+	tx.Merchant = req.Merchant
+	tx.Amount = req.Amount
+	tx.Date = parsedDate
+	tx.CategoryID = req.CategoryID
+	tx.Type = "expense"
+	tx.Method = req.Method
+	tx.Note = "Confirmed from Hybrid OCR"
 	tx.Status = "approved"
 
+	// Timpa item-itemnya dengan yang udah diedit user
+	var newItems []models.TransactionItem
+	for _, it := range req.Items {
+		newItems = append(newItems, models.TransactionItem{
+			Description: it.Description,
+			Quantity:    it.Quantity,
+			Price:       it.Price,
+			Total:       it.Price, // Gak usah dikali, karena udah dihandle di UI
+		})
+	}
+	tx.TransactionItems = newItems
+
+	// Save ke DB
 	if len(tx.TransactionItems) > 0 {
 		if err := u.repo.CreateWithItems(&tx); err != nil {
 			return nil, nil, apperror.Internal("Failed to save transaction with items")
@@ -348,7 +379,7 @@ func (u *transactionUsecase) ProcessScanAlternative(ctx context.Context, imagePa
 		Source:           "ocr_space_pure",
 		Status:           "pending",
 		Note:             "Auto-parsed: Please review amount and date",
-		GmailID:          fmt.Sprintf("SCAN-ALT-%d-%d", userID, time.Now().UnixNano()),
+		GmailID:          utils.NullableString(fmt.Sprintf("SCAN-ALT-%d-%d", userID, time.Now().UnixNano())),
 		TransactionItems: items,
 	}
 
@@ -418,4 +449,65 @@ func (u *transactionUsecase) extractAmount(msg string) float64 {
 		return amount
 	}
 	return 0
+}
+
+func (u *transactionUsecase) ExportTransactionsPDF(ctx context.Context, workspaceID uint, month string) (*bytes.Buffer, error) {
+	// 1. Tarik data pake filter bulan
+	transactions, err := u.repo.GetAllByWorkspaceID(workspaceID, month)
+	if err != nil {
+		return nil, err
+	}
+
+	m := pdf.NewMaroto(consts.Portrait, consts.A4)
+	m.SetPageMargins(10, 15, 10)
+
+	// Bikin judul dinamis
+	judulLaporan := "Laporan Transaksi Keuangan"
+	if month != "" {
+		judulLaporan = fmt.Sprintf("Laporan Transaksi - %s", month)
+	}
+
+	m.Row(20, func() {
+		m.Col(12, func() {
+			m.Text(judulLaporan, props.Text{Top: 5, Size: 16, Style: consts.Bold, Align: consts.Center})
+		})
+	})
+
+	// ... (Header Tabel dan Isi Tabel sama kayak sebelumnya) ...
+	m.Row(10, func() {
+		m.ColSpace(1)
+		m.Col(2, func() { m.Text("Tanggal", props.Text{Style: consts.Bold}) })
+		m.Col(3, func() { m.Text("Merchant", props.Text{Style: consts.Bold}) })
+		m.Col(2, func() { m.Text("Tipe", props.Text{Style: consts.Bold}) })
+		m.Col(3, func() { m.Text("Total (Rp)", props.Text{Style: consts.Bold, Align: consts.Right}) })
+	})
+
+	for _, tx := range transactions {
+		m.Row(8, func() {
+			m.ColSpace(1)
+			m.Col(2, func() { m.Text(tx.Date.Format("2006-01-02"), props.Text{Size: 10}) })
+			m.Col(3, func() { m.Text(tx.Merchant, props.Text{Size: 10}) })
+
+			typeStyle := props.Text{Size: 10, Color: getDrawColor(tx.Type)}
+			m.Col(2, func() { m.Text(strings.ToUpper(tx.Type), typeStyle) })
+
+			m.Col(3, func() { m.Text(fmt.Sprintf("%.2f", tx.Amount), props.Text{Size: 10, Align: consts.Right}) })
+		})
+	}
+
+	buffer, err := m.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	return &buffer, nil
+}
+
+// Helper kecil buat warna text (merah/hijau)
+// Tambahin ini di file yang sama
+func getDrawColor(txType string) color.Color {
+	if txType == "income" {
+		return color.Color{Red: 0, Green: 150, Blue: 0}
+	}
+	return color.Color{Red: 200, Green: 0, Blue: 0}
 }

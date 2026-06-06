@@ -571,10 +571,16 @@ func (h *TelegramHandler) handleCallback(query *tgbotapi.CallbackQuery) {
 	} else if strings.HasPrefix(data, "save_") {
 		id, _ := strconv.Atoi(strings.TrimPrefix(data, "save_"))
 
-		_, notification, _ := h.txUsecase.ConfirmTransaction(context.Background(), uint(id))
-		h.bot.Request(tgbotapi.NewEditMessageText(chatID, messageID, "✅ **Tersimpan!**"))
-		// FIX 3: Bungkus pake h.FormatBudgetResponse
-		h.bot.Send(tgbotapi.NewMessage(chatID, h.FormatBudgetResponse(notification)))
+		// ✨ FIX: Pake pendingUsecase persis kayak confirm_alt biar gak minta argumen editan ✨
+		notification, err := h.pendingUsecase.ConfirmPendingTransaction(context.Background(), uint(id))
+
+		if err != nil {
+			h.bot.Request(tgbotapi.NewEditMessageText(chatID, messageID, "❌ Gagal Simpan: "+err.Error()))
+		} else {
+			h.bot.Request(tgbotapi.NewEditMessageText(chatID, messageID, "✅ **Tersimpan!**"))
+			// Bungkus pake h.FormatBudgetResponse
+			h.bot.Send(tgbotapi.NewMessage(chatID, h.FormatBudgetResponse(notification)))
+		}
 	} else if strings.HasPrefix(data, "delete_") {
 		id, _ := strconv.Atoi(strings.TrimPrefix(data, "delete_"))
 		h.txUsecase.HardDeleteTransaction(uint(id))

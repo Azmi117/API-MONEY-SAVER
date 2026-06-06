@@ -40,7 +40,7 @@ func (c *OCRSpaceClient) ExtractRawText(imagePath string) (string, error) {
 	_ = writer.WriteField("apikey", c.APIKey)
 	_ = writer.WriteField("language", "eng")
 	_ = writer.WriteField("isTable", "true")
-	_ = writer.WriteField("OCREngine", "3")
+	_ = writer.WriteField("OCREngine", "2")
 
 	part, err := writer.CreateFormFile("file", imagePath)
 	if err != nil {
