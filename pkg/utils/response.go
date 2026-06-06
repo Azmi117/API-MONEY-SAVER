@@ -42,3 +42,10 @@ func SuccessPaginatedResponse(code int, message string, data interface{}, meta P
 		Meta:    meta,
 	}
 }
+
+func NullableString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}

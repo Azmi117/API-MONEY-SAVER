@@ -32,8 +32,10 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1. UPDATE STRUCT INPUT
 	var input struct {
 		Name string `json:"name"`
+		Type string `json:"type"` // TAMBAHAN BARU CUY
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -47,15 +49,18 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ws, err := h.usecase.CreateWorkspace(input.Name, userID)
+	// 2. TAMBAHIN PARAMETER TYPE KE USECASE
+	ws, err := h.usecase.CreateWorkspace(input.Name, input.Type, userID)
 	if err != nil {
 		SendError(w, err)
 		return
 	}
 
+	// 3. JANGAN LUPA DIBALIKIN JUGA TYPE-NYA KE FRONTEND
 	response := dto.WorkspaceResponse{
 		ID:        ws.ID,
 		Name:      ws.Name,
+		Type:      ws.Type, // PASTIKAN ADA DI DTO (liat poin 4)
 		OwnerID:   ws.OwnerID,
 		CreatedAt: ws.CreatedAt,
 	}

@@ -27,6 +27,7 @@ type AuthRepository interface {
 	FindByBindingCode(code string) (*models.User, error)
 	FinalizeBinding(userID uint, telegramID int64) error
 	UpdateVerificationStatus(userID uint, status bool) error
+	UpdateProfile(userID uint, name string, avatar string) error
 }
 
 type authRepository struct {
@@ -154,4 +155,17 @@ func (r *authRepository) FinalizeBinding(userID uint, telegramID int64) error {
 func (r *authRepository) UpdateVerificationStatus(userID uint, status bool) error {
 	// Pake GORM buat nge-update kolom is_verified jadi true/false
 	return r.db.Model(&models.User{}).Where("id = ?", userID).Update("is_verified", status).Error
+}
+
+func (r *authRepository) UpdateProfile(userID uint, name string, avatar string) error {
+	updateData := map[string]interface{}{
+		"name": name,
+	}
+
+	// Kalau avatarnya nggak kosong (user nge-upload foto baru), kita masukin ke map update
+	if avatar != "" {
+		updateData["avatar"] = avatar
+	}
+
+	return r.db.Model(&models.User{}).Where("id = ?", userID).Updates(updateData).Error
 }

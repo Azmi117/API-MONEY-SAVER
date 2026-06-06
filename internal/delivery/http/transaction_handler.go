@@ -237,6 +237,7 @@ func (h *TransactionHandler) EmailMandiriWebhook(w http.ResponseWriter, r *http.
 }
 
 // 5. PATCH /transactions/{id}/confirm
+// 5. PATCH /transactions/{id}/confirm
 func (h *TransactionHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPatch {
 		SendError(w, apperror.MethodNotAllowed("Method not allowed, please use PATCH"))
@@ -251,8 +252,15 @@ func (h *TransactionHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// FIX: Tangkep variabel tx (data transaksi asli), dan buang budgetData pake "_"
-	tx, _, err := h.usecase.ConfirmTransaction(r.Context(), uint(id))
+	// ✨ BACA PAYLOAD EDITAN DARI FRONTEND ✨
+	var req dto.ConfirmTransactionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		SendError(w, apperror.BadRequest("Invalid confirmation payload"))
+		return
+	}
+
+	// Masukin req ke usecase
+	tx, _, err := h.usecase.ConfirmTransaction(r.Context(), uint(id), req)
 	if err != nil {
 		SendError(w, err)
 		return
@@ -261,7 +269,6 @@ func (h *TransactionHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
-	// FIX: Response jadi standar, Data isinya detail transaksi yang barusan di-ACC
 	response := struct {
 		StatusCode int         `json:"status_code"`
 		Message    string      `json:"message"`
@@ -475,7 +482,7 @@ func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request)
 			Description: item.Description,
 			Price:       item.Price,
 			Quantity:    item.Quantity,
-			Total:       item.Price * float64(item.Quantity),
+			Total:       item.Price,
 		})
 	}
 
@@ -493,7 +500,7 @@ func (h *TransactionHandler) ConfirmScan(w http.ResponseWriter, r *http.Request)
 		TransactionItems: modelItems,
 		// FIX 2: Ini yang tadi kelupaan makanya meledak!
 		Method:  req.Method,
-		GmailID: req.GmailID,
+		GmailID: utils.NullableString(req.GmailID),
 	}
 
 	// FIX 3: Tangkep err doang, budgetStatus buang aja karena gak dipake di response Web/API
@@ -579,4 +586,40 @@ func (h *TransactionHandler) GetPendingTransactions(w http.ResponseWriter, r *ht
 	}
 
 	json.NewEncoder(w).Encode(response)
+}
+
+func (h *TransactionHandler) ExportPDF(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		SendError(w, apperror.MethodNotAllowed("Method not allowed"))
+		return
+	}
+
+	idStr := r.PathValue("id")
+	workspaceID, _ := strconv.Atoi(idStr)
+
+	if workspaceID == 0 {
+		SendError(w, apperror.BadRequest("Invalid workspace ID"))
+		return
+	}
+
+	// Tangkep parameter bulan dari URL frontend
+	month := r.URL.Query().Get("month")
+
+	pdfBuffer, err := h.usecase.ExportTransactionsPDF(r.Context(), uint(workspaceID), month)
+	if err != nil {
+		SendError(w, apperror.Internal("Failed to generate PDF"))
+		return
+	}
+
+	// Namain file beda kalau ada bulannya
+	fileName := fmt.Sprintf("report_workspace_%d.pdf", workspaceID)
+	if month != "" {
+		fileName = fmt.Sprintf("report_workspace_%d_%s.pdf", workspaceID, month)
+	}
+
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", fileName))
+	w.Header().Set("Content-Length", strconv.Itoa(pdfBuffer.Len()))
+
+	w.Write(pdfBuffer.Bytes())
 }

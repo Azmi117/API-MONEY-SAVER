@@ -19,7 +19,7 @@ type Transaction struct {
 	Merchant    string    `gorm:"type:varchar(100)" json:"merchant"`
 	Source      string    `gorm:"type:varchar(20);default:'web'" json:"source"`
 	Status      string    `gorm:"type:varchar(20);default:'approved'" json:"status"`
-	GmailID     string    `gorm:"type:varchar(100);uniqueIndex" json:"gmail_id"`
+	GmailID     *string   `gorm:"type:varchar(100);uniqueIndex" json:"gmail_id"`
 
 	// --- RELATIONSHIPS ---
 	User             User              `gorm:"foreignKey:UserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`

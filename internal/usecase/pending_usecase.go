@@ -10,6 +10,7 @@ import (
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/repository"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
+	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/utils"
 )
 
 type PendingUsecase interface {
@@ -137,7 +138,7 @@ func (u *pendingUsecase) ApproveEmailLog(ctx context.Context, logID uint, userID
 		Method:      logData.Method,
 		Note:        logData.Note,
 		Type:        "expense",
-		GmailID:     logData.GmailID,
+		GmailID:     utils.NullableString(logData.GmailID),
 	}
 
 	if err := u.txRepo.Create(tx); err != nil {
@@ -175,7 +176,7 @@ func (u *pendingUsecase) ConfirmEmailTransaction(ctx context.Context, userID uin
 		Type:        "expense",
 		Source:      "Email",
 		Status:      "approved",
-		GmailID:     emailData.GmailID,
+		GmailID:     utils.NullableString(emailData.GmailID),
 	}
 
 	if err := u.txRepo.Create(newTransaction); err != nil {
