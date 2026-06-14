@@ -17,6 +17,7 @@ type GoogleAuthService interface {
 	GetAuthURL(userID uint) string
 	ExchangeCode(ctx context.Context, userID uint, code string) error
 	GetGmailService(refreshToken string) (*gmail.Service, error)
+	CheckTokenValidity(ctx context.Context, refreshToken string) bool
 }
 
 type googleAuthService struct {
@@ -81,4 +82,25 @@ func (s *googleAuthService) GetGmailService(refreshToken string) (*gmail.Service
 	client := s.config.Client(ctx, token)
 
 	return gmail.NewService(ctx, option.WithHTTPClient(client))
+}
+
+func (s *googleAuthService) CheckTokenValidity(ctx context.Context, refreshToken string) bool {
+	if refreshToken == "" {
+		return false
+	}
+
+	token := &oauth2.Token{
+		RefreshToken: refreshToken,
+	}
+
+	tokenSource := s.config.TokenSource(ctx, token)
+	newToken, err := tokenSource.Token()
+
+	if err != nil {
+		// Jika error, kemungkinan besar token sudah dicabut (revoked) atau expired
+		return false
+	}
+
+	// Token berhasil diperbarui (atau masih valid)
+	return newToken.Valid()
 }

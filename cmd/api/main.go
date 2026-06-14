@@ -36,6 +36,8 @@ func main() {
 	categoryRepo := repository.NewCategoryRepository(db)
 	categoryHandler := delivery.NewCategoryHandler(categoryRepo)
 	otpRepo := repository.NewOTPRepository(db)
+	authRepo := repository.NewAuthRepository(db)
+	gas := service.NewGoogleAuthService(authRepo)
 
 	// ---------------------------------------------------------
 	// 0. PKG LAYER (External Clients)
@@ -50,10 +52,9 @@ func main() {
 	// ---------------------------------------------------------
 	// 1. AUTH LAYER
 	// ---------------------------------------------------------
-	authRepo := repository.NewAuthRepository(db)
 	googleAuthService := service.NewGoogleAuthService(authRepo)
 
-	authUsecase := usecase.NewAuthUsecase(authRepo, otpRepo)
+	authUsecase := usecase.NewAuthUsecase(authRepo, otpRepo, gas)
 	authHandler := delivery.NewAuthHandler(authUsecase, googleAuthService)
 
 	// ---------------------------------------------------------
