@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"context"
 	cryptoRand "crypto/rand"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/repository"
+	"github.com/Azmi117/API-MONEY-SAVER.git/internal/service"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/apperror"
 	"github.com/Azmi117/API-MONEY-SAVER.git/pkg/utils"
 	"github.com/golang-jwt/jwt/v5"
@@ -31,19 +33,21 @@ type AuthUsecase interface {
 	VerifyLoginOTP(email string, code string) (string, string, error)
 	ForgotPasswordRequest(email string) error
 	ResetPassword(email string, code string, newPassword string) error
-	FindByID(id uint) (*models.User, error)
+	FindByID(ctx context.Context, id uint) (*models.User, error)
 	UpdateProfile(userID uint, name string, avatar string) error
 }
 
 type authUsecase struct {
-	repo    repository.AuthRepository
-	otpRepo repository.OTPRepository
+	repo              repository.AuthRepository
+	otpRepo           repository.OTPRepository
+	googleAuthService service.GoogleAuthService
 }
 
-func NewAuthUsecase(repo repository.AuthRepository, otpRepo repository.OTPRepository) AuthUsecase {
+func NewAuthUsecase(repo repository.AuthRepository, otpRepo repository.OTPRepository, gas service.GoogleAuthService) AuthUsecase {
 	return &authUsecase{
-		repo:    repo,
-		otpRepo: otpRepo,
+		repo:              repo,
+		otpRepo:           otpRepo,
+		googleAuthService: gas,
 	}
 }
 
@@ -80,10 +84,28 @@ func (u *authUsecase) Register(user *models.User) error {
 	return nil
 }
 
-func (u *authUsecase) FindByID(id uint) (*models.User, error) {
-	// Lu bisa tambahin logika validasi di sini kalau perlu,
-	// misalnya cek apakah user aktif atau kena banned
-	return u.repo.FindByID(id)
+func (u *authUsecase) FindByID(ctx context.Context, id uint) (*models.User, error) {
+	user, err := u.repo.FindByID(id)
+	if err != nil {
+		return nil, err
+	}
+
+	// --- LOGIC PENGECEKAN TOKEN GOOGLE ---
+	if user.GmailEnabled {
+		// Periksa apakah token masih valid
+		isValid := u.googleAuthService.CheckTokenValidity(ctx, user.GoogleRefreshToken)
+
+		if !isValid {
+			// Token sudah tidak valid, matikan GmailEnabled
+			user.GmailEnabled = false
+			user.GoogleRefreshToken = "" // Opsional: Kosongkan token yang sudah rusak
+
+			// Simpan perubahan ke database
+			_ = u.repo.Update(user)
+		}
+	}
+
+	return user, nil
 }
 
 // 1. REFACTOR: Method Login hanya untuk cek password & kirim OTP Login

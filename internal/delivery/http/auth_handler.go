@@ -495,8 +495,8 @@ func (h *authHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Panggil usecase, bukan langsung repo!
-	user, err := h.usecase.FindByID(uint(userID))
+	// Panggil usecase dengan melempar context
+	user, err := h.usecase.FindByID(r.Context(), uint(userID))
 	if err != nil {
 		SendError(w, apperror.NotFound("User not found"))
 		return

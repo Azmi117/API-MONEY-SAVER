@@ -24,25 +24,34 @@ func ParseMandiriEmail(subject string, body string) *ParsedTransaction {
 	bodyLower := strings.ToLower(body)
 	subjectLower := strings.ToLower(subject)
 
-	// 1. Deteksi Metode (QRIS harus paling atas karena subject-nya sering cuma "Transfer")
+	// 1. Deteksi Metode & Ekstrak Amount (Pake Sistem Prioritas)
 	if strings.Contains(bodyLower, "dengan qr") {
 		method = "QRIS"
-		amount = extractAmount(body, "Nominal")
+		amount = getFirstValidAmount(body, []string{"Total", "Nominal"})
 	} else if strings.Contains(bodyLower, "biaya transfer") {
 		method = "Transfer Bank Lain"
-		amount = extractAmount(body, "Total Transaksi")
+		amount = getFirstValidAmount(body, []string{"Total Transaksi", "Total", "Jumlah Transfer"})
 	} else if strings.Contains(bodyLower, "jumlah transfer") || strings.Contains(subjectLower, "transfer") {
 		method = "Transfer"
-		amount = extractAmount(body, "Jumlah Transfer")
+		amount = getFirstValidAmount(body, []string{"Total", "Jumlah Transfer", "Nominal"})
 	} else if strings.Contains(subjectLower, "top-up") {
 		method = "Top-up"
-		amount = extractAmount(body, "Nominal Top-up")
+		amount = getFirstValidAmount(body, []string{"Total", "Nominal Top-up", "Nominal"})
+	} else if strings.Contains(bodyLower, "nomor va") || strings.Contains(bodyLower, "virtual account") || strings.Contains(subjectLower, "pembayaran") {
+		method = "Virtual Account"
+		// Khusus VA: WAJIB cari "Total" dulu biar biaya admin kehitung
+		amount = getFirstValidAmount(body, []string{"Total", "Nominal Transaksi", "Nominal"})
 	} else {
 		method = "Transfer"
-		amount = extractAmount(body, "(?:Nominal|Total|Jumlah)")
+		amount = getFirstValidAmount(body, []string{"Total", "Jumlah", "Nominal"})
 	}
 
-	// 2. Deteksi Merchant & Note (Pake Body Mentah biar Regex-nya akurat lewat Tag HTML)
+	// 2. Jurus Ultimate: Kalau semua keyword gagal, cari angka paling gede di email
+	if amount == 0 {
+		amount = extractMaxAmount(body)
+	}
+
+	// 3. Deteksi Merchant & Note
 	if method == "Top-up" {
 		merchant = "Mandiri E-money"
 		note = "Top-up via NFC/Livin"
@@ -51,12 +60,12 @@ func ParseMandiriEmail(subject string, body string) *ParsedTransaction {
 		note = extractNote(body)
 	}
 
-	// 4. Extract Date (Pake logic lama lo yang udah oke)
+	// 4. Extract Date
 	reTime := regexp.MustCompile(`(\d{2}:\d{2}:\d{2})`)
 	reDate := regexp.MustCompile(`(\d{1,2}\s[A-Za-z]{3}\s\d{4})`)
 	dateStr := reDate.FindString(body)
 	timeStr := reTime.FindString(body)
-	parsedDate := time.Now() // Default
+	parsedDate := time.Now()
 
 	if dateStr != "" && timeStr != "" {
 		fullDateStr := translateIndoMonth(strings.TrimSpace(dateStr) + " " + strings.TrimSpace(timeStr))
@@ -84,38 +93,81 @@ func translateIndoMonth(dateStr string) string {
 	return r.Replace(dateStr)
 }
 
-func extractAmount(body string, keyword string) float64 {
-	// (?s) biar tembus newline, [^R]* biar cari angka setelah Rp
-	re := regexp.MustCompile(fmt.Sprintf(`(?s)%s[^R]*Rp\s?([\d\.,]+)`, keyword))
-	match := re.FindStringSubmatch(body)
-	if len(match) > 1 {
-		clean := strings.ReplaceAll(match[1], ".", "")
-		clean = strings.ReplaceAll(clean, ",", ".")
-		val, _ := strconv.ParseFloat(clean, 64)
-		return val
+// Helper: Bersihin string jadi angka
+func parseMoney(str string) float64 {
+	clean := strings.ReplaceAll(str, ".", "")
+	clean = strings.ReplaceAll(clean, ",", ".")
+	val, _ := strconv.ParseFloat(clean, 64)
+	return val
+}
+
+// Helper: Cari angka berdasarkan prioritas array keyword
+func getFirstValidAmount(body string, keywords []string) float64 {
+	for _, kw := range keywords {
+		val := extractAmount(body, kw)
+		if val > 0 {
+			return val // Langsung return kalau dapet > 0
+		}
 	}
 	return 0
 }
 
-func extractMerchant(body string) string {
-	// Regex ini nyari teks di dalam tag <h4> atau <td> yang ada setelah kata Penerima/Penyedia Jasa
-	// Lebih aman daripada stripHTML dulu
-	re := regexp.MustCompile(`(?i)(?:Penerima|Penyedia Jasa).*?<(?:h4|td)[^>]*>\s*(.*?)\s*</(?:h4|td)>`)
-	match := re.FindStringSubmatch(body)
+func extractAmount(body string, keyword string) float64 {
+	cleanBody := stripHTML(body)
+	re := regexp.MustCompile(fmt.Sprintf(`(?is)%s.*?(?:Rp|IDR)[\.\s]*([\d\.,]+)`, keyword))
+	match := re.FindStringSubmatch(cleanBody)
 
 	if len(match) > 1 {
-		return strings.TrimSpace(match[1])
+		return parseMoney(match[1])
+	}
+	return 0
+}
+
+// Fallback nangkep angka terbesar
+func extractMaxAmount(body string) float64 {
+	cleanBody := stripHTML(body)
+	reFallback := regexp.MustCompile(`(?i)(?:Rp|IDR)[\.\s]*([\d\.,]+)`)
+	matches := reFallback.FindAllStringSubmatch(cleanBody, -1)
+
+	var maxAmount float64
+	for _, m := range matches {
+		if len(m) > 1 {
+			val := parseMoney(m[1])
+			if val > maxAmount {
+				maxAmount = val
+			}
+		}
+	}
+	return maxAmount
+}
+
+func extractMerchant(body string) string {
+	cleanBody := stripHTML(body)
+	re := regexp.MustCompile(`(?i)(?:Penerima|Penyedia Jasa|Institusi|Merchant)\s+(.*?)(?:\s\s|$)`)
+	match := re.FindStringSubmatch(cleanBody)
+
+	if len(match) > 1 {
+		res := strings.TrimSpace(match[1])
+		if idx := strings.Index(res, "  "); idx != -1 {
+			res = res[:idx]
+		}
+		if res != "" {
+			return res
+		}
 	}
 	return "Merchant Tidak Terdeteksi"
 }
 
 func extractNote(body string) string {
-	// Cari label "Keterangan", lalu ambil isi <td> di sampingnya
-	re := regexp.MustCompile(`(?i)Keterangan.*?<td[^>]*>\s*(.*?)\s*</td>`)
-	match := re.FindStringSubmatch(body)
+	cleanBody := stripHTML(body)
+	re := regexp.MustCompile(`(?i)Keterangan\s+(.*?)(?:\s\s|$)`)
+	match := re.FindStringSubmatch(cleanBody)
 
 	if len(match) > 1 {
 		res := strings.TrimSpace(match[1])
+		if idx := strings.Index(res, "  "); idx != -1 {
+			res = res[:idx]
+		}
 		if res != "" && res != "-" {
 			return res
 		}
@@ -125,12 +177,15 @@ func extractNote(body string) string {
 
 func stripHTML(input string) string {
 	re := regexp.MustCompile(`<[^>]*>`)
-	// Ganti tag HTML dengan "  " (dua spasi) biar ada pemisah antar kata yang tadinya beda kolom
-	clean := re.ReplaceAllString(input, "  ")
-
+	clean := re.ReplaceAllString(input, "  ") // Pakai 2 spasi buat bates kolom
 	clean = strings.ReplaceAll(clean, "&nbsp;", " ")
-	// Hapus tab dan ganti ke spasi
 	clean = strings.ReplaceAll(clean, "\t", "  ")
+	clean = strings.ReplaceAll(clean, "\n", "  ")
+	clean = strings.ReplaceAll(clean, "\r", "  ")
 
+	// Bersihin spasi berlebih
+	for strings.Contains(clean, "   ") {
+		clean = strings.ReplaceAll(clean, "   ", "  ")
+	}
 	return clean
 }
