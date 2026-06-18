@@ -36,6 +36,7 @@ type TransactionUsecase interface {
 	ConfirmScanTransaction(ctx context.Context, tx *models.Transaction, items []models.TransactionItem) (*dto.BudgetStatusResponse, error)
 	ProcessTelegramInput(ctx context.Context, msg string) (string, bool, float64)
 	ExportTransactionsPDF(ctx context.Context, workspaceID uint, month string) (*bytes.Buffer, error)
+	GetPendingEmailLogs(userID uint) ([]models.EmailParsed, error)
 }
 
 type transactionUsecase struct {

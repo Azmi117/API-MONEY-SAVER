@@ -42,7 +42,10 @@ func (u *debtUsecase) GenerateUniqueShortCode(workspaceID uint) (string, error) 
 		}
 
 		finalCode := string(code)
-		exists, _ := u.debtRepo.IsShortCodeExists(workspaceID, finalCode)
+		exists, err := u.debtRepo.IsShortCodeExists(workspaceID, finalCode)
+		if err != nil {
+			return "", err
+		}
 		if !exists {
 			return finalCode, nil
 		}
