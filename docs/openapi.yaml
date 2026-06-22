@@ -1,0 +1,1735 @@
+openapi: 3.0.3
+info:
+  title: API MONEY SAVER
+  description: API documentation for all available endpoints inside the API-MONEY-SAVER finance tracker project.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development server
+paths:
+  /auth/register:
+    post:
+      summary: Register a new user
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: User's full name
+                email:
+                  type: string
+                  format: email
+                  description: Active email address
+                password:
+                  type: string
+                  format: password
+                  description: Access password (min 6 characters)
+                telegram_id:
+                  type: integer
+                  description: Optional Telegram client ID
+                email_parsing_enable:
+                  type: string
+                  enum: ["true", "false"]
+                  description: Enable automatic sync parser for bank emails
+                avatar:
+                  type: string
+                  format: binary
+                  description: Optional profile avatar picture
+              required:
+                - name
+                - email
+                - password
+      responses:
+        "201":
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /auth/register/verify:
+    post:
+      summary: Verify registration OTP
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                code:
+                  type: string
+                  description: 6-digit OTP code sent via email
+              required:
+                - email
+                - code
+      responses:
+        "200":
+          description: Registration OTP verified successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /auth/login:
+    post:
+      summary: User Login (Step 1)
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+              required:
+                - email
+                - password
+      responses:
+        "202":
+          description: Accepted. Password valid and login verification OTP sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        "403":
+          description: Account is not verified yet
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: error
+                  message:
+                    type: string
+                    example: Not verified
+                  data:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        example: USER_NOT_VERIFIED
+                      email:
+                        type: string
+                        example: user@example.com
+
+  /auth/login/verify:
+    post:
+      summary: Verify login OTP (Step 2)
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                code:
+                  type: string
+                  description: 6-digit OTP code
+              required:
+                - email
+                - code
+      responses:
+        "200":
+          description: Login successful. Sets access_token and refresh_token cookies.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: access_token=jwt_token_here; HttpOnly; Path=/
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /auth/otp/resend:
+    post:
+      summary: Resend verification OTP code
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                type:
+                  type: string
+                  enum: [login, register]
+              required:
+                - email
+                - type
+      responses:
+        "200":
+          description: OTP resent successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /auth/forgot-password:
+    post:
+      summary: Request password reset OTP
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+              required:
+                - email
+      responses:
+        "200":
+          description: Password reset OTP sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /auth/forgot-password/verify:
+    post:
+      summary: Complete password reset using OTP
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                code:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 6
+              required:
+                - email
+                - code
+                - new_password
+      responses:
+        "200":
+          description: Password reset successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /auth/refresh:
+    post:
+      summary: Refresh access token cookie
+      tags:
+        - Authentication
+      security:
+        - CookieAuthRefresh: []
+      responses:
+        "200":
+          description: Token refreshed. Sets new access_token cookie.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: access_token=new_jwt_token_here; HttpOnly; Path=/
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /auth/logout:
+    post:
+      summary: User logout
+      tags:
+        - Authentication
+      security:
+        - CookieAuthAccess: []
+      responses:
+        "200":
+          description: Logged out successfully. Clears cookies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /auth/sso/google/login:
+    get:
+      summary: Initiates Google SSO Login
+      tags:
+        - Authentication
+      responses:
+        "307":
+          description: Redirect to Google consent screen
+
+  /auth/sso/google/callback:
+    get:
+      summary: Callback for Google SSO login
+      tags:
+        - Authentication
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "303":
+          description: Redirects back to dashboard on successful login
+
+  /auth/profile:
+    get:
+      summary: Get user profile info
+      tags:
+        - User Profile
+      security:
+        - CookieAuthAccess: []
+      responses:
+        "200":
+          description: Profile retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Profile retrieved
+                  data:
+                    $ref: '#/components/schemas/User'
+    put:
+      summary: Update user profile details
+      tags:
+        - User Profile
+      security:
+        - CookieAuthAccess: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: New display name
+                avatar:
+                  type: string
+                  format: binary
+                  description: Optional new avatar file
+              required:
+                - name
+      responses:
+        "200":
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Profil berhasil diupdate
+                  data:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      avatar:
+                        type: string
+
+  /auth/telegram/binding-code:
+    get:
+      summary: Get Telegram bot linking code
+      tags:
+        - User Profile
+      security:
+        - CookieAuthAccess: []
+      responses:
+        "200":
+          description: Binding code generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      binding_code:
+                        type: string
+                      instruction:
+                        type: string
+
+  /auth/google/login:
+    get:
+      summary: Get Gmail Sync Auth link
+      tags:
+        - Gmail Sync
+      security:
+        - CookieAuthAccess: []
+      responses:
+        "200":
+          description: Gmail Auth URL generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+
+  /auth/google/callback:
+    get:
+      summary: Callback for Gmail authorization
+      tags:
+        - Gmail Sync
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "307":
+          description: Redirects to profile page with sync parameter
+
+  /workspaces:
+    get:
+      summary: Get list of workspaces
+      tags:
+        - Workspace Management
+      security:
+        - CookieAuthAccess: []
+      responses:
+        "200":
+          description: Workspaces fetched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Workspace'
+    post:
+      summary: Create a new workspace
+      tags:
+        - Workspace Management
+      security:
+        - CookieAuthAccess: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                type:
+                  type: string
+                  example: budgeting
+              required:
+                - name
+      responses:
+        "201":
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/WorkspaceResponse'
+
+  /workspaces/{id}:
+    put:
+      summary: Update workspace name
+      tags:
+        - Workspace Management
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+              required:
+                - name
+      responses:
+        "200":
+          description: Workspace updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+    delete:
+      summary: Delete workspace
+      tags:
+        - Workspace Management
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Workspace deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /workspaces/target:
+    post:
+      summary: Set savings and limit targets
+      tags:
+        - Workspace Management
+      security:
+        - CookieAuthAccess: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetTargetRequest'
+      responses:
+        "200":
+          description: Targets configured successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /workspaces/{id}/members:
+    get:
+      summary: List workspace members
+      tags:
+        - Workspace Management
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Members retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user_id:
+                          type: integer
+                        user_name:
+                          type: string
+                        email:
+                          type: string
+                        role:
+                          type: string
+
+  /workspaces/{id}/summary:
+    get:
+      summary: Get workspace monthly budget summary
+      tags:
+        - Workspace Management
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            example: 2026-06
+      responses:
+        "200":
+          description: Summary loaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/BudgetStatusResponse'
+
+  /workspaces/{id}/transactions/export:
+    get:
+      summary: Export transactions to PDF file
+      tags:
+        - Transactions
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: month
+          in: query
+          required: false
+          schema:
+            type: string
+            example: 2026-06
+      responses:
+        "200":
+          description: PDF exported successfully
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+  /workspaces/invitations/pending:
+    get:
+      summary: Get pending invitations
+      tags:
+        - Invitations
+      security:
+        - CookieAuthAccess: []
+      responses:
+        "200":
+          description: Pending invitations fetched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        workspaceName:
+                          type: string
+                        sender:
+                          type: string
+                        status:
+                          type: string
+
+  /workspaces/{id}/invite:
+    post:
+      summary: Invite a user to a workspace
+      tags:
+        - Invitations
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+              required:
+                - email
+      responses:
+        "200":
+          description: Invitation sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /workspaces/invitations/{id}/accept:
+    post:
+      summary: Accept a pending invitation
+      tags:
+        - Invitations
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Joined workspace successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /workspaces/invitations/{id}/reject:
+    post:
+      summary: Reject a pending invitation
+      tags:
+        - Invitations
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Invitation rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /workspaces/{id}/categories:
+    get:
+      summary: Get workspace categories
+      tags:
+        - Categories
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Categories fetched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Category'
+    post:
+      summary: Create category inside workspace
+      tags:
+        - Categories
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                type:
+                  type: string
+                  enum: [income, expense]
+                icon:
+                  type: string
+              required:
+                - name
+                - type
+      responses:
+        "201":
+          description: Category created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+
+  /transactions/manual:
+    post:
+      summary: Record transaction manually
+      tags:
+        - Transactions
+      security:
+        - CookieAuthAccess: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransactionRequest'
+      responses:
+        "201":
+          description: Transaction recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code:
+                    type: integer
+                    example: 201
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Transaction'
+
+  /workspaces/{id}/transactions:
+    get:
+      summary: Get verified transaction history list
+      tags:
+        - Transactions
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: History retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Transaction'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+
+  /transactions/{id}:
+    delete:
+      summary: Delete transaction
+      tags:
+        - Transactions
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Transaction deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    nullable: true
+
+  /workspaces/{id}/pending-transactions:
+    get:
+      summary: Get pending transactions list
+      tags:
+        - Transactions
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Pending transactions loaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PendingTransaction'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+
+  /transactions/{id}/confirm:
+    patch:
+      summary: Confirm a pending transaction
+      tags:
+        - Transactions
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmTransactionRequest'
+      responses:
+        "200":
+          description: Transaction confirmed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Transaction'
+
+  /transactions/scan-hybrid2:
+    post:
+      summary: Scan receipt using Hybrid LLM Engine
+      tags:
+        - Receipt Scanning
+      security:
+        - CookieAuthAccess: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: Receipt image file
+                workspace_id:
+                  type: integer
+              required:
+                - image
+                - workspace_id
+      responses:
+        "200":
+          description: Receipt scanned (saved as pending)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ProcessScanHybridResult'
+                  pending_id:
+                    type: integer
+
+  /transactions/scan-alt:
+    post:
+      summary: Scan receipt using OCR Space (Alternative)
+      tags:
+        - Receipt Scanning
+      security:
+        - CookieAuthAccess: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                workspace_id:
+                  type: integer
+              required:
+                - file
+                - workspace_id
+      responses:
+        "200":
+          description: Scan successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                  data:
+                    type: object
+                  pending_id:
+                    type: integer
+
+  /transactions/scan-alt/confirm:
+    post:
+      summary: Confirm scan-alt transaction
+      tags:
+        - Receipt Scanning
+      security:
+        - CookieAuthAccess: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmTransactionRequest'
+      responses:
+        "201":
+          description: Transaction confirmed and saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code:
+                    type: integer
+                    example: 201
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Transaction'
+
+  /emails/pending:
+    get:
+      summary: Get pending Gmail transaction notifications
+      tags:
+        - Gmail Sync
+      security:
+        - CookieAuthAccess: []
+      responses:
+        "200":
+          description: Logs fetched successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EmailParsed'
+
+  /emails/{id}/approve:
+    post:
+      summary: Approve parsed email log and write transaction
+      tags:
+        - Gmail Sync
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workspace_id:
+                  type: integer
+              required:
+                - workspace_id
+      responses:
+        "200":
+          description: Email approved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      budget_status:
+                        $ref: '#/components/schemas/BudgetStatusResponse'
+
+  /emails/{id}/reject:
+    post:
+      summary: Reject parsed email notification
+      tags:
+        - Gmail Sync
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Email log rejected successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /workspaces/{id}/debts:
+    get:
+      summary: Get workspace claims ledger
+      tags:
+        - Debts & Claims
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Debts claims fetched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Debt'
+
+  /transactions/split:
+    post:
+      summary: Assign split bill to workspace members
+      tags:
+        - Debts & Claims
+      security:
+        - CookieAuthAccess: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SplitBillRequest'
+      responses:
+        "200":
+          description: Split bill processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /debts/{id}/pay:
+    patch:
+      summary: Settle debt ledger as paid
+      tags:
+        - Debts & Claims
+      security:
+        - CookieAuthAccess: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Debt paid successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+
+  /uploads/{filepath}:
+    get:
+      summary: Serves static uploaded files
+      tags:
+        - Static Files
+      parameters:
+        - name: filepath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File bytes stream
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+
+components:
+  securitySchemes:
+    CookieAuthAccess:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: Authentication access JWT token
+    CookieAuthRefresh:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+      description: Refresh session JWT token
+
+  schemas:
+    APIResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: Operation completed successfully
+        data:
+          type: object
+          nullable: true
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        avatar:
+          type: string
+        telegram_id:
+          type: integer
+          nullable: true
+        email_parsing_enable:
+          type: boolean
+        account_tier:
+          type: string
+        gmail_enabled:
+          type: boolean
+
+    Workspace:
+      type: object
+      properties:
+        ID:
+          type: integer
+        name:
+          type: string
+        owner_id:
+          type: integer
+        type:
+          type: string
+
+    WorkspaceResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+        owner_id:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    SetTargetRequest:
+      type: object
+      properties:
+        workspace_id:
+          type: integer
+        period:
+          type: string
+          example: "2026-06"
+        amount_limit:
+          type: number
+        savings_target:
+          type: number
+      required:
+        - workspace_id
+        - period
+
+    MemberSummary:
+      type: object
+      properties:
+        user_name:
+          type: string
+        total:
+          type: number
+
+    BudgetStatusResponse:
+      type: object
+      properties:
+        period:
+          type: string
+        limit_amount:
+          type: number
+        total_expense:
+          type: number
+        remaining_budget:
+          type: number
+        expense_details:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemberSummary'
+
+    Category:
+      type: object
+      properties:
+        ID:
+          type: integer
+        name:
+          type: string
+        workspace_id:
+          type: integer
+        type:
+          type: string
+          enum: [income, expense]
+        icon:
+          type: string
+
+    CreateTransactionRequest:
+      type: object
+      properties:
+        workspace_id:
+          type: integer
+        category_id:
+          type: integer
+          nullable: true
+        amount:
+          type: number
+        type:
+          type: string
+          enum: [income, expense]
+        date:
+          type: string
+          format: date-time
+        note:
+          type: string
+        merchant:
+          type: string
+        source:
+          type: string
+          enum: [web, telegram]
+        method:
+          type: string
+        gmail_id:
+          type: string
+      required:
+        - workspace_id
+        - category_id
+        - amount
+        - type
+        - date
+        - source
+
+    TransactionItemConfirm:
+      type: object
+      properties:
+        description:
+          type: string
+        price:
+          type: number
+        quantity:
+          type: integer
+        user_id:
+          type: integer
+
+    ConfirmTransactionRequest:
+      type: object
+      properties:
+        workspace_id:
+          type: integer
+        merchant:
+          type: string
+        amount:
+          type: number
+        payer_id:
+          type: integer
+        date:
+          type: string
+        type:
+          type: string
+        category_id:
+          type: integer
+          nullable: true
+        note:
+          type: string
+        method:
+          type: string
+        gmail_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransactionItemConfirm'
+      required:
+        - workspace_id
+        - merchant
+        - amount
+        - payer_id
+        - date
+        - type
+
+    TransactionItem:
+      type: object
+      properties:
+        transaction_id:
+          type: integer
+        description:
+          type: string
+        quantity:
+          type: integer
+        price:
+          type: number
+        total:
+          type: number
+
+    Transaction:
+      type: object
+      properties:
+        ID:
+          type: integer
+        user_id:
+          type: integer
+        workspace_id:
+          type: integer
+        category_id:
+          type: integer
+          nullable: true
+        amount:
+          type: number
+        type:
+          type: string
+        method:
+          type: string
+        date:
+          type: string
+          format: date-time
+        note:
+          type: string
+        merchant:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransactionItem'
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        total_items:
+          type: integer
+        total_pages:
+          type: integer
+
+    PendingTransaction:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: integer
+        workspace_id:
+          type: integer
+        source:
+          type: string
+        raw_data:
+          type: string
+          description: Serialized JSON results string
+        status:
+          type: string
+        image_path:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ProcessScanHybridResult:
+      type: object
+      properties:
+        transaction:
+          $ref: '#/components/schemas/Transaction'
+        engine:
+          type: string
+        confidence:
+          type: integer
+        fallback_used:
+          type: boolean
+
+    EmailParsed:
+      type: object
+      properties:
+        ID:
+          type: integer
+        user_id:
+          type: integer
+        transaction_id:
+          type: integer
+          nullable: true
+        amount:
+          type: number
+        merchant:
+          type: string
+        parsed_date:
+          type: string
+          format: date-time
+        status:
+          type: string
+        bank_source:
+          type: string
+        gmail_id:
+          type: string
+        method:
+          type: string
+        note:
+          type: string
+        type:
+          type: string
+
+    SplitItemRequest:
+      type: object
+      properties:
+        item_name:
+          type: string
+        user_id:
+          type: integer
+        quantity:
+          type: integer
+        price:
+          type: number
+      required:
+        - item_name
+        - user_id
+        - quantity
+        - price
+
+    SplitBillRequest:
+      type: object
+      properties:
+        transaction_id:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SplitItemRequest'
+      required:
+        - transaction_id
+        - items
+
+    Debt:
+      type: object
+      properties:
+        ID:
+          type: integer
+        workspace_id:
+          type: integer
+        from_user_id:
+          type: integer
+        to_user_id:
+          type: integer
+        amount:
+          type: number
+        short_code:
+          type: string
+        note:
+          type: string
+        is_paid:
+          type: boolean
+        from_user:
+          type: object
+          properties:
+            name:
+              type: string
+            email:
+              type: string
+        to_user:
+          type: object
+          properties:
+            name:
+              type: string
+            email:
+              type: string
