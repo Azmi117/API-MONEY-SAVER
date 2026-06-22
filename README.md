@@ -76,6 +76,7 @@ air
 ### 6. API Documentation
 
 Proyek ini sudah dilengkapi dengan dokumentasi API interaktif yang tertanam langsung di dalam server backend.
+![alt text](assets/image.png)
 
 1. Pastikan server aplikasi sudah berjalan (`go run` atau `air`).
 2. Buka browser dan akses:
