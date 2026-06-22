@@ -13,6 +13,9 @@ func MapRoutes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, tH *Tr
 
 	fs := http.FileServer(http.Dir("./uploads"))
 	mux.Handle("GET /uploads/", http.StripPrefix("/uploads", fs))
+
+	docsFs := http.FileServer(http.Dir("./docs"))
+	mux.Handle("GET /docs/", http.StripPrefix("/docs", docsFs))
 }
 
 func registerV1Routes(mux *http.ServeMux, aH *authHandler, wH *WorkspaceHandler, tH *TransactionHandler, dH *DebtHandler, cH *CategoryHandler, authRepo repository.AuthRepository, db *gorm.DB) {
