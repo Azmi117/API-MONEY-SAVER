@@ -11,3 +11,7 @@ uploads/**/*
 !uploads/.gitkeep
 !uploads/avatar/
 !uploads/avatar/.gitkeep
+
+# Test coverage outputs
+coverage/
+*.out
