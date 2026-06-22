@@ -9,50 +9,77 @@ Aplikasi backend REST API untuk manajemen keuangan personal yang terintegrasi de
 Ikuti urutan langkah di bawah ini untuk mendirikan dan menjalankan aplikasi di lingkungan lokal.
 
 ### 1. Clone Repository
+
 Silakan *clone repository* ini dan masuk ke dalam direktori utama proyek:
+
 ```bash
-git clone [https://github.com/Azmi117/API-MONEY-SAVER.git] (Tanpa kurung siku)
+git clone https://github.com/Azmi117/API-MONEY-SAVER.git
 cd API-MONEY-SAVER
+```
 
 ### 2. Instalasi Package / Dependensi
-gunakan command : go mod tidy
 
+Gunakan perintah:
+
+```bash
+go mod tidy
+```
 
 ### 3. Setup Environment Variables (.env)
 
-Duplikat file template .env.example menjadi file .env asli:
+Duplikat file template `.env.example` menjadi file `.env`:
 
-Linux/Mac/GitBash: cp .env.example .env
+**Linux / Mac / Git Bash**
+```bash
+cp .env.example .env
+```
 
-Windows (PowerShell): Copy-Item .env.example -Destination .env
+**Windows (PowerShell)**
+```powershell
+Copy-Item .env.example -Destination .env
+```
 
-Buka file .env baru tersebut, lalu isi dan sesuaikan semua value (seperti kredensial database, API Key, token Telegram, dll) dengan data lokal.
-
+Buka file `.env` lalu sesuaikan seluruh konfigurasi seperti kredensial database, API key, token Telegram, dan kebutuhan lokal lainnya.
 
 ### 4. Setup Database & Migrasi
 
-Sebelum masuk ke perintah migrasi kode, kita harus buat DB manual dulu di PostgreSQL.
+Sebelum menjalankan migrasi, buat database PostgreSQL terlebih dahulu.
 
-Buka PostgreSQL (bisa lewat pgAdmin, DBeaver, atau terminal psql).
+Buka PostgreSQL (pgAdmin, DBeaver, atau terminal `psql`) lalu jalankan:
 
-Jalankan perintah SQL untuk membuat database baru yang namanya disesuaikan dengan isi DB_NAME di file .env (EX: CREATE DATABASE api_money_saver;)
+```sql
+CREATE DATABASE api_money_saver;
+```
 
-Jika database manual sudah terbuat, jalankan script migrasi dari Go untuk mengisi tabel-tabelnya otomatis (EX: go run cmd/migrate/main.go)
+> Sesuaikan nama database dengan nilai `DB_NAME` pada file `.env`.
 
+Setelah database berhasil dibuat, jalankan migrasi:
 
-### 5. Setup Database & Migrasi
+```bash
+go run cmd/migrate/main.go
+```
 
-instal aplikasi Air secara global di komputer (jika belum punya) lewat perintah:
+### 5. Install Air (Hot Reload)
 
-go install [github.com/air-verse/air@latest] (Tanpa kurung siku)
+Install Air secara global (jika belum terpasang):
 
-setelah menginstall cukup ketik air pada terminal lalu tekan ENTER
+```bash
+go install github.com/air-verse/air@latest
+```
 
+Setelah selesai, jalankan:
 
-### 6. API DOCUMENTATION
+```bash
+air
+```
 
-Proyek ini sudah dilengkapi dengan UI interaktif yang tertanam langsung di dalam server backend untuk mempermudah pengujian kontrak endpoint.
+### 6. API Documentation
 
-A. Pastikan server aplikasi sudah berjalan (baik via go run atau air).
+Proyek ini sudah dilengkapi dengan dokumentasi API interaktif yang tertanam langsung di dalam server backend.
 
-B. Buka browser, lalu akses URL berikut: http://localhost:8080/docs/
+1. Pastikan server aplikasi sudah berjalan (`go run` atau `air`).
+2. Buka browser dan akses:
+
+```text
+http://localhost:8080/docs/
+```
