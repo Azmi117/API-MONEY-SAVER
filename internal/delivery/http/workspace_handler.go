@@ -201,7 +201,7 @@ func (h *WorkspaceHandler) RejectInvitation(w http.ResponseWriter, r *http.Reque
 
 // 7. SET TARGET
 func (h *WorkspaceHandler) SetTarget(w http.ResponseWriter, r *http.Request) {
-	_, ok := r.Context().Value("user_id").(uint)
+	userID, ok := r.Context().Value("user_id").(uint)
 	if !ok {
 		SendError(w, apperror.Unauthorized("Invalid user session"))
 		return
@@ -212,6 +212,26 @@ func (h *WorkspaceHandler) SetTarget(w http.ResponseWriter, r *http.Request) {
 		SendError(w, apperror.BadRequest("Invalid JSON payload"))
 		return
 	}
+
+	// --- 🚀 TAMBAHAN VALIDASI TIPE WORKSPACE ---
+	ws, err := h.usecase.GetWorkspaceByID(req.WorkspaceID)
+	if err != nil {
+		SendError(w, err) // Ini otomatis ngeluarin error NotFound dari usecase
+		return
+	}
+
+	// Cek apakah tipenya bukan budgeting
+	if ws.Type != "budgeting" {
+		SendError(w, apperror.BadRequest("Fitur Set Target hanya bisa digunakan untuk workspace tipe 'budgeting'"))
+		return
+	}
+
+	// Opsional: Pastikan yang nge-set target cuma owner atau membernya (Biar gak bisa ditembak dari Postman sembarangan)
+	if ws.OwnerID != userID {
+		SendError(w, apperror.Forbidden("Access denied: You don't have permission to set target for this workspace"))
+		return
+	}
+	// ------------------------------------------
 
 	if err := h.targetUsecase.SetTarget(req); err != nil {
 		SendError(w, err)

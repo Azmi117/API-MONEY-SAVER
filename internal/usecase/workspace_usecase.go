@@ -25,6 +25,7 @@ type WorkspaceUsecase interface {
 	CreateFromTelegram(ctx context.Context, telegramID int64, chatTitle string, chatID int64, wsType string) (*models.Workspace, error)
 	GetMembers(workspaceID uint) ([]models.WorkspaceMember, error)
 	GetWorkspaceSummary(workspaceID int, period string) (map[string]float64, error)
+	GetWorkspaceByID(workspaceID uint) (*models.Workspace, error)
 }
 
 type workspaceUsecase struct {
@@ -310,4 +311,12 @@ func (u *workspaceUsecase) GetWorkspaceSummary(workspaceID int, period string) (
 		"budget_limit":    limit,
 		"budget_spent":    data["total_expense"],
 	}, nil
+}
+
+func (u *workspaceUsecase) GetWorkspaceByID(workspaceID uint) (*models.Workspace, error) {
+	ws, err := u.workspaceRepo.FindByID(workspaceID)
+	if err != nil {
+		return nil, apperror.NotFound("Workspace not found")
+	}
+	return ws, nil
 }
