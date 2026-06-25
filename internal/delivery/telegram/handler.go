@@ -223,6 +223,10 @@ func (h *TelegramHandler) handleStatus(m *tgbotapi.Message) {
 			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "Grup belum terhubung."))
 			return
 		}
+		if ws == nil {
+			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Workspace untuk grup ini sudah dihapus."))
+			return
+		}
 		notification, err := h.targetUsecase.CheckWorkspaceTarget(ws.ID)
 		if err != nil {
 			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal tarik data."))
@@ -367,22 +371,19 @@ func (h *TelegramHandler) handleSplitPhotoUpload(m *tgbotapi.Message) {
 		resp.Body.Close()
 	}
 
-	ws, _ := h.wsRepo.GetByTelegramChatID(m.Chat.ID)
-	user, _ := h.authRepo.GetByTelegramID(int64(m.From.ID))
-
-	pendingID, err := h.pendingUsecase.CreatePendingSplit(context.Background(), user.ID, ws.ID, localPath)
-	if err != nil {
-		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ Gagal buat draft transaksi: "+err.Error()))
-		return
+	baseURL := os.Getenv("FE_SPLIT_BILLS_URL")
+	if baseURL == "" {
+		// Ini biar lu tau di terminal kalau variabelnya emang gak kedeteksi
+		fmt.Println("⚠️ WARNING: FE_SPLIT_BILLS_URL tidak ditemukan di .env!")
+		baseURL = "http://localhost:5173/split-bills" // Fallback biar tetep jalan
 	}
+	targetURL := baseURL
+	fmt.Println("URL FE:", baseURL)
 
-	baseURL := "https://web.nesav.com/split-bill"
-	targetURL := fmt.Sprintf("%s/%d", baseURL, pendingID)
-
-	resMsg := fmt.Sprintf("📸 **Struk Terdeteksi (Split Master)!**\n\nStruk lu udah aman di server, Mi. Karena ini grup Split Bill, bagi-bagi itemnya langsung di Web aja ya biar presisi.\n\n🔗 [Klik di sini buat bagi-bagi item](%s)", targetURL)
+	resMsg := fmt.Sprintf("📸 <b>Struk Terdeteksi (Split Master)!</b>\n\nStruk lu udah aman di server, Mi. Karena ini grup Split Bill, bagi-bagi itemnya langsung di Web aja ya biar presisi.\n\n🔗 <a href=\"%s\">Klik di sini buat bagi-bagi item</a>", targetURL)
 
 	msg := tgbotapi.NewMessage(m.Chat.ID, resMsg)
-	msg.ParseMode = "Markdown"
+	msg.ParseMode = "HTML"
 	h.bot.Send(msg)
 }
 
@@ -589,21 +590,21 @@ func (h *TelegramHandler) handleCallback(query *tgbotapi.CallbackQuery) {
 }
 
 func (h *TelegramHandler) handleHelp(m *tgbotapi.Message) {
-	helpText := `📖 *Panduan Bot Nesav*
+	helpText := `📖 <b>Panduan Bot Nesav</b>
 
-*Grup Commands:*
+<b>Grup Commands:</b>
 🛡️ /init - Setup grup
 📊 /info - Detail Workspace
 💸 /cek_utang - Cek tagihan
 💳 /bayar - Bayar tagihan
 
-*Private Commands:*
+<b>Private Commands:</b>
 🔗 /bind [kode] - Hubungkan akun
 📋 /list_workspace - Daftar Workspace
 📈 /status - Summary Global`
 
 	msg := tgbotapi.NewMessage(m.Chat.ID, helpText)
-	msg.ParseMode = "Markdown"
+	msg.ParseMode = "HTML" // <-- Ganti jadi HTML
 	h.bot.Send(msg)
 }
 
