@@ -94,12 +94,15 @@ func (h *TelegramHandler) Listen() {
 
 		if update.Message.IsCommand() {
 			switch update.Message.Command() {
-			case "bind", "help", "list_workspace", "start":
+			case "help":
+				h.handleHelp(update.Message)
+			case "bind", "list_workspace":
 				h.handlePrivateCommands(update.Message)
-			case "init", "info", "cek_utang", "bayar":
+			case "init", "info", "cek_utang", "bayar", "status":
 				h.handleGroupCommands(update.Message)
-			case "status":
-				h.handleStatus(update.Message)
+			default:
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "❌ Command not found. Use /help for the list of available commands.")
+				h.bot.Send(msg)
 			}
 			continue
 		}
@@ -130,8 +133,9 @@ func (h *TelegramHandler) handlePrivateCommands(m *tgbotapi.Message) {
 		msg := tgbotapi.NewMessage(m.Chat.ID, list)
 		msg.ParseMode = "Markdown"
 		h.bot.Send(msg)
-	case "help", "start":
+	case "help":
 		h.handleHelp(m)
+		// Status sengaja nggak dimasukin sini karena nggak mau dipake di private
 	}
 }
 
@@ -140,7 +144,9 @@ func (h *TelegramHandler) handlePrivateContent(m *tgbotapi.Message) {
 }
 
 func (h *TelegramHandler) handleGroupCommands(m *tgbotapi.Message) {
+	// Pengecekan biar command grup nggak bisa dipake di private
 	if m.Chat.IsPrivate() {
+		h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "❌ This command can only be used in a group!"))
 		return
 	}
 
@@ -157,6 +163,12 @@ func (h *TelegramHandler) handleGroupCommands(m *tgbotapi.Message) {
 		h.handleHelp(m)
 	case "info":
 		h.handleInfo(m)
+	case "status":
+		if ws.Type != "Budgeting" {
+			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "🛡️ Fitur ini cuma buat grup **Budgeting**!"))
+			return
+		}
+		h.handleStatus(m)
 	case "cek_utang":
 		if ws.Type != "split" {
 			h.bot.Send(tgbotapi.NewMessage(m.Chat.ID, "🍕 Fitur ini cuma buat grup **Split Bill**!"))
@@ -592,16 +604,20 @@ func (h *TelegramHandler) handleCallback(query *tgbotapi.CallbackQuery) {
 func (h *TelegramHandler) handleHelp(m *tgbotapi.Message) {
 	helpText := `📖 <b>Panduan Bot Nesav</b>
 
-<b>Grup Commands:</b>
-🛡️ /init - Setup grup
-📊 /info - Detail Workspace
-💸 /cek_utang - Cek tagihan
-💳 /bayar - Bayar tagihan
+	<b>Universal Commands:</b>
+	🆘 /help - Command List
 
-<b>Private Commands:</b>
-🔗 /bind [kode] - Hubungkan akun
-📋 /list_workspace - Daftar Workspace
-📈 /status - Summary Global`
+	<b>Grup Commands:</b>
+	🛡️ /init - Setup grup
+	📊 /info - Detail Workspace
+	💸 /cek_utang - Cek tagihan
+	💳 /bayar - Bayar tagihan
+	📈 /status - Summary Global
+
+	<b>Private Commands:</b>
+	🔗 /bind [kode] - Hubungkan akun
+	📋 /list_workspace - Daftar Workspace
+	`
 
 	msg := tgbotapi.NewMessage(m.Chat.ID, helpText)
 	msg.ParseMode = "HTML" // <-- Ganti jadi HTML
