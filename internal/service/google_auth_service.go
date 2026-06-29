@@ -63,7 +63,9 @@ func (s *googleAuthService) ExchangeCode(ctx context.Context, userID uint, code 
 	}
 
 	// 3. Update field OAuth
-	user.GoogleRefreshToken = token.RefreshToken
+	if token.RefreshToken != "" {
+		user.GoogleRefreshToken = token.RefreshToken
+	}
 	user.GmailEnabled = true
 	user.GoogleTokenExpires = token.Expiry
 
