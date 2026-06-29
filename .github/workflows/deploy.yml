@@ -1,0 +1,44 @@
+name: Deploy Money Saver API to VPS
+
+# 1. Robot bakal jalan SETIAP KALI lu push ke branch main
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Langkah A: Mengambil/checkout code dari repo github lu ke runner machine
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      # Langkah B: Masuk ke VPS pake kunci rahasia yang kita set kemarin
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "🤖 Menghubungi VPS... Koneksi Berhasil!"
+            
+            # 1. Masuk ke folder aplikasi di VPS
+            cd /root/app-money-saver
+            
+            # 2. Ambil kodingan terbaru dari GitHub
+            echo "📥 Mengambil update kodingan terbaru dari GitHub..."
+            git pull origin main
+            
+            # 3. Build dan restart container Docker secara background
+            echo "🚀 Memulai proses Build & Restart Docker Container..."
+            docker compose up -d --build
+            
+            # 4. Bersihkan sisa-sisa build lama (biar RAM/SSD VPS gak penuh sampah)
+            echo "🧹 Membersihkan sisa docker image lawas yang menggantung..."
+            docker system prune -f
+            
+            echo "✅ DEPLOYMENT SUKSES TOTAL CUY!"
