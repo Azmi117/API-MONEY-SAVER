@@ -24,7 +24,7 @@ import (
 func main() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Failed load .env!!")
+		fmt.Println(".env not found in OS/Container!")
 	}
 
 	db := config.ConnectDB()

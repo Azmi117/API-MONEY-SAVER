@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -14,7 +13,7 @@ func ConnectDB() *gorm.DB {
 	err := godotenv.Load()
 
 	if err != nil {
-		log.Fatal("Failed load .env!")
+		fmt.Println(".env not found in OS/Container!")
 	}
 
 	host := os.Getenv("HOST")
@@ -29,7 +28,7 @@ func ConnectDB() *gorm.DB {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 
 	if err != nil {
-		log.Fatal("Failed Connect DB!")
+		fmt.Println(".env not found in OS/Container!")
 	}
 
 	fmt.Println("Connection Success!")

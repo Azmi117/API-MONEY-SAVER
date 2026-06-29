@@ -2,6 +2,7 @@ package testutils
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/Azmi117/API-MONEY-SAVER.git/internal/models"
 	"gorm.io/driver/postgres"
@@ -9,12 +10,36 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// SetupTestDB initializes the database connection and migrates models for testing purposes.
 func SetupTestDB() *gorm.DB {
-	// IMPORTANT: Adjust the user and password to match your local PostgreSQL credentials.
-	dsn := "host=localhost user=postgres password=azmi123 dbname=money_saver_test port=5432 sslmode=disable TimeZone=Asia/Jakarta"
+	// Ambil dari environment, kalau kosong (lagi di laptop), pake default lokal
+	host := os.Getenv("TEST_DB_HOST")
+	if host == "" {
+		host = "localhost"
+	}
 
-	// Set the logger to silent mode to prevent SQL queries from cluttering the test output.
+	user := os.Getenv("TEST_DB_USER")
+	if user == "" {
+		user = "postgres"
+	}
+
+	password := os.Getenv("TEST_DB_PASSWORD")
+	if password == "" {
+		password = "azmi123"
+	}
+
+	dbName := os.Getenv("TEST_DB_NAME")
+	if dbName == "" {
+		dbName = "money_saver_test"
+	}
+
+	port := os.Getenv("TEST_DB_PORT")
+	if port == "" {
+		port = "5432"
+	}
+
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Asia/Jakarta",
+		host, user, password, dbName, port)
+
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -22,22 +47,12 @@ func SetupTestDB() *gorm.DB {
 		panic("Failed to connect to the test database: " + err.Error())
 	}
 
-	// Auto-migrate all required models to the test database.
 	err = db.AutoMigrate(
-		&models.User{},
-		&models.Workspace{},
-		&models.Category{},
-		&models.Transaction{},
-		&models.TransactionItem{},
-		&models.Target{},
-		&models.Debt{},
-		&models.PendingTransaction{},
-		&models.EmailParsed{},
-		&models.WorkspaceMember{},
-		&models.WorkspaceInvitation{},
-		&models.OTP{},
-		&models.RefreshToken{},
-		&models.RevokeToken{},
+		&models.User{}, &models.Workspace{}, &models.Category{},
+		&models.Transaction{}, &models.TransactionItem{}, &models.Target{},
+		&models.Debt{}, &models.PendingTransaction{}, &models.EmailParsed{},
+		&models.WorkspaceMember{}, &models.WorkspaceInvitation{}, &models.OTP{},
+		&models.RefreshToken{}, &models.RevokeToken{},
 	)
 	if err != nil {
 		panic("Failed to perform database migration for testing: " + err.Error())

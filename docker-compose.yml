@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  # ------------------------------------
+  # AREA DEVELOPMENT (APP UTAMA)
+  # ------------------------------------
+  postgres_db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5432:5432"
+    # --- TAMBAHIN INI BIAR DATA GAK HILANG ---
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # --- TAMBAHIN HEALTHCHECK BIAR GAK CONNECTION REFUSED ---
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api_backend:
+    build: .
+    restart: always
+    ports:
+      - "8080:8080"
+    # --- UPDATE DEPENDS_ON BIAR NUNGGUIN DB SEHAT ---
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - HOST=postgres_db 
+    command: ["sh", "-c", "./migrate && ./main"]
+
+  # ------------------------------------
+  # AREA TESTING (UNIT & INTEGRATION)
+  # ------------------------------------
+  postgres_test_db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: azmi123
+      POSTGRES_DB: money_saver_test
+    ports:
+      - "5433:5432"
+
+  api_test:
+    build: 
+      context: .
+      target: builder
+    depends_on:
+      - postgres_test_db
+    environment:
+      - TEST_DB_HOST=postgres_test_db
+      - TEST_DB_USER=postgres
+      - TEST_DB_PASSWORD=azmi123
+      - TEST_DB_NAME=money_saver_test
+      - TEST_DB_PORT=5432
+    command: ["go", "test", "-v", "./..."] 
+
+# --- JANGAN LUPA TAMBAHIN VOLUMES DI PALING BAWAH ---
+volumes:
+  pgdata:
