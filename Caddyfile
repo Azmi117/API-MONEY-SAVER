@@ -1,0 +1,3 @@
+be-money-saver.velto.id {
+    reverse_proxy backend:8080
+}

@@ -27,7 +27,7 @@ services:
     build: .
     restart: always
     ports:
-      - "8080:8080"
+      - "8080:8080" # Sementara biarin dulu buat backup test, nanti kalau Caddy ijo boleh dihapus.
     # --- UPDATE DEPENDS_ON BIAR NUNGGUIN DB SEHAT ---
     depends_on:
       postgres_db:
@@ -37,6 +37,22 @@ services:
     environment:
       - HOST=postgres_db 
     command: ["sh", "-c", "./migrate && ./main"]
+
+  # ------------------------------------
+  # TAMBAHAN: REVERSE PROXY TAMENG SSL
+  # ------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"   # HTTP buat verifikasi tantangan Let's Encrypt
+      - "443:443" # HTTPS jalur utama secure lu
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api_backend
 
   # ------------------------------------
   # AREA TESTING (UNIT & INTEGRATION)
@@ -64,6 +80,8 @@ services:
       - TEST_DB_PORT=5432
     command: ["go", "test", "-v", "./..."] 
 
-# --- JANGAN LUPA TAMBAHIN VOLUMES DI PALING BAWAH ---
+# --- VOLUMES DI PALING BAWAH ---
 volumes:
   pgdata:
+  caddy_data:   # Ditambahin biar data SSL Let's Encrypt gak ilang pas restart
+  caddy_config: # Ditambahin buat config internal caddy
