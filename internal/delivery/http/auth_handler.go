@@ -202,6 +202,7 @@ func (h *authHandler) VerifyLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
+    Secure:   true,
 		SameSite: http.SameSiteNoneMode,
 	})
 
@@ -211,6 +212,7 @@ func (h *authHandler) VerifyLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
+    Secure:   true,
 		SameSite: http.SameSiteNoneMode,
 	})
 
@@ -236,6 +238,7 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
+    Secure:   true,
 		SameSite: http.SameSiteNoneMode,
 	})
 
@@ -416,6 +419,7 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
+    Secure:   true,
 		SameSite: http.SameSiteNoneMode, // Sesuaikan sama setting backend lu
 	})
 
@@ -425,6 +429,7 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
+    Secure:   true,
 		SameSite: http.SameSiteNoneMode,
 	})
 
