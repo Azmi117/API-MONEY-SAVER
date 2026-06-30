@@ -202,7 +202,7 @@ func (h *authHandler) VerifyLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteNoneMode,
 	})
 
 	http.SetCookie(w, &http.Cookie{
@@ -211,7 +211,7 @@ func (h *authHandler) VerifyLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteNoneMode,
 	})
 
 	utils.RespondWithJSON(w, http.StatusOK, "success", "Login verification successful. Welcome!", nil)
@@ -236,7 +236,7 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteNoneMode,
 	})
 
 	utils.RespondWithJSON(w, http.StatusOK, "success", "Token successfully refreshed", nil)
@@ -416,7 +416,7 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
-		SameSite: http.SameSiteLaxMode, // Sesuaikan sama setting backend lu
+		SameSite: http.SameSiteNoneMode, // Sesuaikan sama setting backend lu
 	})
 
 	http.SetCookie(w, &http.Cookie{
@@ -425,7 +425,7 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteNoneMode,
 	})
 
 	// LANGSUNG REDIRECT KE FRONTEND DASHBOARD
