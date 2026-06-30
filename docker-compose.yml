@@ -26,8 +26,8 @@ services:
   api_backend:
     build: .
     restart: always
-    ports:
-      - "8080:8080" # Sementara biarin dulu buat backup test, nanti kalau Caddy ijo boleh dihapus.
+    # ports:
+    #   - "8080:8080" # Sementara biarin dulu buat backup test, nanti kalau Caddy ijo boleh dihapus.
     # --- UPDATE DEPENDS_ON BIAR NUNGGUIN DB SEHAT ---
     depends_on:
       postgres_db:
