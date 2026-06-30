@@ -253,7 +253,9 @@ func TestIntegration_TransactionAPI(t *testing.T) {
 		emailLog := models.EmailParsed{
 			UserID: user.ID, Status: "Pending", Amount: 50000,
 			ParsedDate: fixedDate,
-			Type:       "expense", BankSource: "Mandiri", RawEmail: "raw_test", Merchant: "Mandiri Merchant",
+			Type:       "expense", BankSource: "Mandiri",
+			RawEmail: "raw_test", Merchant: "Mandiri Merchant",
+			GmailID: "GMAIL_DUMMY_UNIQUE_001",
 		}
 		// FIX: Tambahin error check biar tau kalau DB nolak datanya
 		errLog := db.Create(&emailLog).Error
@@ -278,7 +280,9 @@ func TestIntegration_TransactionAPI(t *testing.T) {
 		emailLog2 := models.EmailParsed{
 			UserID: user.ID, Status: "Pending", Amount: 10000,
 			ParsedDate: fixedDate,
-			Type:       "expense", BankSource: "BCA", RawEmail: "raw", Merchant: "BCA Merchant",
+			Type:       "expense", BankSource: "BCA",
+			RawEmail: "raw", Merchant: "BCA Merchant",
+			GmailID: "GMAIL_DUMMY_UNIQUE_002",
 		}
 		errLog2 := db.Create(&emailLog2).Error
 		if errLog2 != nil {
