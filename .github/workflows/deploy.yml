@@ -1,21 +1,67 @@
-name: Deploy Money Saver API to VPS
+name: CI/CD Money Saver API
 
-# 1. Robot bakal jalan SETIAP KALI lu push ke branch main
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
 
 jobs:
-  deploy:
+  # ================= JOB 1: RUN TESTS =================
+  run-tests:
     runs-on: ubuntu-latest
+    
+    services:
+      postgres_test:
+        image: postgres:16-alpine
+        env:
+          # Ini env internal untuk container Postgres tiruan di GitHub (wajib sinkron dengan Go)
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: azmi123
+          POSTGRES_DB: money_saver_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
-      # Langkah A: Mengambil/checkout code dari repo github lu ke runner machine
       - name: Checkout Repository Code
         uses: actions/checkout@v4
 
-      # Langkah B: Masuk ke VPS pake kunci rahasia yang kita set kemarin
+      - name: Set up Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25' # Sesuai request lu cuy, udah gua ganti ke 1.25
+          cache: true
+
+      - name: Run Go Unit & Integration Tests
+        # Di sini nama ENV KANAN kiri WAJIB disamain dengan os.Getenv() di file db_setup.go lu!
+        env:
+          TEST_DB_HOST: localhost
+          TEST_DB_PORT: 5432
+          TEST_DB_USER: postgres
+          TEST_DB_PASSWORD: azmi123
+          TEST_DB_NAME: money_saver_test
+          APP_ENV: test
+        run: |
+          echo "🧪 Menjalankan Unit Test dan Integration Test di GitHub Runner..."
+          go test -v ./...
+
+  # ================= JOB 2: DEPLOY TO VPS =================
+  deploy-to-vps:
+    runs-on: ubuntu-latest
+    needs: run-tests
+    if: github.event_name == 'push'
+    
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
       - name: Deploy to VPS via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -25,20 +71,11 @@ jobs:
           port: 22
           script: |
             echo "🤖 Menghubungi VPS... Koneksi Berhasil!"
-            
-            # 1. Masuk ke folder aplikasi di VPS
             cd /root/app-money-saver
-            
-            # 2. Ambil kodingan terbaru dari GitHub
-            echo "📥 Mengambil update kodingan terbaru dari GitHub..."
+            echo "📥 Mengambil update kodingan terbaru..."
             git pull origin main
-            
-            # 3. Build dan restart container Docker secara background
             echo "🚀 Memulai proses Build & Restart Docker Container..."
             docker compose up -d --build
-            
-            # 4. Bersihkan sisa-sisa build lama (biar RAM/SSD VPS gak penuh sampah)
-            echo "🧹 Membersihkan sisa docker image lawas yang menggantung..."
+            echo "🧹 Bersihkan image menggantung..."
             docker system prune -f
-            
             echo "✅ DEPLOYMENT SUKSES TOTAL CUY!"
