@@ -50,7 +50,7 @@ jobs:
           APP_ENV: test
         run: |
           echo "🧪 Menjalankan Unit Test dan Integration Test di GitHub Runner..."
-          go test -v ./...
+          go test -v -p 1 ./...
 
   # ================= JOB 2: DEPLOY TO VPS =================
   deploy-to-vps:
