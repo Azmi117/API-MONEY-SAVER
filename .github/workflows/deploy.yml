@@ -13,17 +13,16 @@ jobs:
   run-tests:
     runs-on: ubuntu-latest
     
-    # Di sini kita minta GitHub buat nyalain database Postgres tiruan khusus buat Test
     services:
       postgres_test:
         image: postgres:16-alpine
         env:
+          # Ini env internal untuk container Postgres tiruan di GitHub (wajib sinkron dengan Go)
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: testpassword
-          POSTGRES_DB: money_saver_test # Sesuaikan dengan nama DB di db_setup.go lu
+          POSTGRES_PASSWORD: azmi123
+          POSTGRES_DB: money_saver_test
         ports:
           - 5432:5432
-        # Pasticn container Postgres nya bener-bener udah siap nerima koneksi
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -37,17 +36,17 @@ jobs:
       - name: Set up Go Environment
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25' # Sesuai request lu cuy, udah gua ganti ke 1.25
           cache: true
 
       - name: Run Go Unit & Integration Tests
-        # Di sini kita tembak perintah test sekaligus passing ENV tiruannya
+        # Di sini nama ENV KANAN kiri WAJIB disamain dengan os.Getenv() di file db_setup.go lu!
         env:
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USER: postgres
-          DB_PASSWORD: testpassword
-          DB_NAME: money_saver_test
+          TEST_DB_HOST: localhost
+          TEST_DB_PORT: 5432
+          TEST_DB_USER: postgres
+          TEST_DB_PASSWORD: azmi123
+          TEST_DB_NAME: money_saver_test
           APP_ENV: test
         run: |
           echo "🧪 Menjalankan Unit Test dan Integration Test di GitHub Runner..."
@@ -56,7 +55,7 @@ jobs:
   # ================= JOB 2: DEPLOY TO VPS =================
   deploy-to-vps:
     runs-on: ubuntu-latest
-    needs: run-tests # WAJIB LULUS TEST DI ATAS DULU!
+    needs: run-tests
     if: github.event_name == 'push'
     
     steps:
