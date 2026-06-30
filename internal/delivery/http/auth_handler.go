@@ -429,7 +429,8 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 	})
 
 	// LANGSUNG REDIRECT KE FRONTEND DASHBOARD
-	http.Redirect(w, r, "http://localhost:5173/dashboard", http.StatusSeeOther)
+	feURL := os.Getenv("FRONTEND_URL")
+	http.Redirect(w, r, feURL+"/dashboard", http.StatusSeeOther)
 }
 
 // 1. Handler Minta OTP Lupa Password (POST /auth/forgot-password)
