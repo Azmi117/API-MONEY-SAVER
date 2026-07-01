@@ -202,7 +202,7 @@ func (h *authHandler) VerifyLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
-    Secure:   true,
+		Secure:   true,
 		SameSite: http.SameSiteNoneMode,
 	})
 
@@ -212,7 +212,7 @@ func (h *authHandler) VerifyLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
-    Secure:   true,
+		Secure:   true,
 		SameSite: http.SameSiteNoneMode,
 	})
 
@@ -238,7 +238,7 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
-    Secure:   true,
+		Secure:   true,
 		SameSite: http.SameSiteNoneMode,
 	})
 
@@ -419,7 +419,7 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(15 * time.Minute),
-    Secure:   true,
+		Secure:   true,
 		SameSite: http.SameSiteNoneMode, // Sesuaikan sama setting backend lu
 	})
 
@@ -429,7 +429,7 @@ func (h *authHandler) GoogleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		HttpOnly: true,
 		Path:     "/",
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
-    Secure:   true,
+		Secure:   true,
 		SameSite: http.SameSiteNoneMode,
 	})
 
@@ -567,7 +567,7 @@ func (h *authHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 
 		// Simpen path relatifnya ke database. Karena lu udah punya route "/uploads/"
 		// di routes.go, frontend nanti bakal bisa akses gambar ini.
-		avatarURL = "http://localhost:8080/uploads/avatars/" + filename
+		avatarURL = "https://be-money-saver.velto.id/uploads/avatars/" + filename
 	}
 
 	// 4. Panggil Usecase buat simpen ke DB
