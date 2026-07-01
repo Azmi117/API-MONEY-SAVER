@@ -134,7 +134,7 @@ func main() {
 	delivery.MapRoutes(mux, authHandler, wsHandler, txHandler, debtHandler, categoryHandler, authRepo, db)
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173", "https://skipping-wavy-audacious.ngrok-free.dev"}, // Sesuaikan sama port React lu
+		AllowedOrigins:   []string{"http://localhost:5173", "https://ubiquitous-malasada-29d610.netlify.app"}, // Sesuaikan sama port React lu
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},

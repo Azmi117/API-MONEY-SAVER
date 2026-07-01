@@ -387,7 +387,7 @@ func (h *TelegramHandler) handleSplitPhotoUpload(m *tgbotapi.Message) {
 	if baseURL == "" {
 		// Ini biar lu tau di terminal kalau variabelnya emang gak kedeteksi
 		fmt.Println("⚠️ WARNING: FE_SPLIT_BILLS_URL tidak ditemukan di .env!")
-		baseURL = "https://skipping-wavy-audacious.ngrok-free.dev/split-bills" // Fallback biar tetep jalan
+		baseURL = "https://ubiquitous-malasada-29d610.netlify.app/split-bills" // Fallback biar tetep jalan
 	}
 	targetURL := baseURL
 	fmt.Println("URL FE:", baseURL)
